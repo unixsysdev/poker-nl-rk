@@ -29,6 +29,10 @@ class RandomPolicy:
         return int(self.rng.choice(actions)), float(self.rng.random())
 
 
+def env_obs_dim(env_config: CudaEnvConfig) -> int:
+    return 52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len
+
+
 def sample_actions(policy: TwoHeadPolicy, obs: torch.Tensor, mask: torch.Tensor, deterministic: bool = False):
     type_logits, size_params, value = policy.net(obs)
     type_logits = type_logits.masked_fill(mask == 0, -1e9)
@@ -197,7 +201,7 @@ def rollout_episode_steps(
 
 def train_candidate(base_state: dict, env_config: CudaEnvConfig, args, pool_states: list[dict]):
     policy = TwoHeadPolicy(
-        PolicyConfig(obs_dim=env_config.obs_dim, hidden_dim=args.hidden_dim),
+        PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim),
         device=args.device,
     )
     policy.load_state_dict(base_state)
@@ -205,7 +209,7 @@ def train_candidate(base_state: dict, env_config: CudaEnvConfig, args, pool_stat
 
     opponent_policies = []
     for state in pool_states:
-        opp = TwoHeadPolicy(PolicyConfig(obs_dim=env_config.obs_dim, hidden_dim=args.hidden_dim), device=args.device)
+        opp = TwoHeadPolicy(PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim), device=args.device)
         opp.load_state_dict(state)
         opponent_policies.append(opp)
 
@@ -306,7 +310,7 @@ def main():
     )
 
     base_policy = TwoHeadPolicy(
-        PolicyConfig(obs_dim=env_config.obs_dim, hidden_dim=args.hidden_dim),
+        PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim),
         device=args.device,
     )
     if args.resume:
