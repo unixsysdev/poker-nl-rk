@@ -96,13 +96,13 @@ def load_policy(policy_ref, obs_dim: int, device: str = "cpu"):
     return policy
 
 
-def evaluate(
+def _evaluate_single(
     policy_ref,
     env_config: VectorEnvConfig,
     episodes: int,
-    opponent: str = "random",
-    lbr_rollouts: int = 32,
-    lbr_bet_fracs: list[float] | None = None,
+    opponent: str,
+    lbr_rollouts: int,
+    lbr_bet_fracs: list[float],
 ):
     if lbr_bet_fracs is None:
         lbr_bet_fracs = [0.25, 0.5, 1.0]
@@ -131,12 +131,50 @@ def evaluate(
     return float(np.mean(returns))
 
 
+def evaluate(
+    policy_ref,
+    env_config: VectorEnvConfig,
+    episodes: int,
+    opponent: str = "random",
+    lbr_rollouts: int = 32,
+    lbr_bet_fracs: list[float] | None = None,
+):
+    if lbr_bet_fracs is None:
+        lbr_bet_fracs = [0.25, 0.5, 1.0]
+    if opponent == "proxy":
+        random_score = _evaluate_single(
+            policy_ref,
+            env_config,
+            episodes,
+            opponent="random",
+            lbr_rollouts=lbr_rollouts,
+            lbr_bet_fracs=lbr_bet_fracs,
+        )
+        lbr_score = _evaluate_single(
+            policy_ref,
+            env_config,
+            episodes,
+            opponent="lbr",
+            lbr_rollouts=lbr_rollouts,
+            lbr_bet_fracs=lbr_bet_fracs,
+        )
+        return float(min(random_score, lbr_score))
+    return _evaluate_single(
+        policy_ref,
+        env_config,
+        episodes,
+        opponent=opponent,
+        lbr_rollouts=lbr_rollouts,
+        lbr_bet_fracs=lbr_bet_fracs,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate production vectorized NLHE policy.")
     parser.add_argument("--policy", required=True)
     parser.add_argument("--episodes", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--opponent", choices=["random", "lbr"], default="random")
+    parser.add_argument("--opponent", choices=["random", "lbr", "proxy"], default="random")
     parser.add_argument("--lbr-rollouts", type=int, default=32)
     parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")
     parser.add_argument("--num-players", type=int, default=6)

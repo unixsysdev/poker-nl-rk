@@ -39,3 +39,14 @@ python custom_poker_lab/prod_lab/eval.py \
   --opponent lbr --lbr-rollouts 32 --lbr-bet-fracs 0.25,0.5,1.0 \
   --episodes 2000
 ```
+
+## League Training (Population)
+
+```bash
+python custom_poker_lab/prod_lab/train_league.py --batch-size 64 --num-players 6 \
+  --rounds 4 --population 6 --top-k 2 \
+  --episodes-per-agent 20000 --rollout-episodes 4 --device cuda \
+  --eval-episodes 2000 --eval-opponent proxy \
+  --pool-size 8 --pool-prob 0.5 \
+  --save-dir experiments/prod_nlhe_league
+```
