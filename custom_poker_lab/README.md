@@ -71,6 +71,10 @@ python custom_poker_lab/poker_eval.py \
   --episodes 2000 --eval-parallel 4
 ```
 
+## Vectorized "Prod" Engine
+
+For the high-throughput vectorized engine, see `custom_poker_lab/prod_lab/README.md`.
+
 ## League Training (Population)
 
 ```bash

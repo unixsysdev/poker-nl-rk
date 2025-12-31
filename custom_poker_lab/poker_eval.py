@@ -20,6 +20,8 @@ class RandomPolicy:
     def act(self, state):
         legal = state["legal_action_mask"]
         actions = [i for i, v in enumerate(legal) if v > 0]
+        if not actions:
+            return 1, 0.0
         action_type = int(np.random.choice(actions))
         bet_frac = float(np.random.random())
         return action_type, bet_frac
@@ -84,6 +86,9 @@ def evaluate(env, policy, opponent, episodes):
     for _ in range(episodes):
         state, player_id = env.reset()
         while not env.is_over():
+            if np.sum(state["legal_action_mask"]) == 0:
+                state, player_id = env.step(1, 0.0)
+                continue
             if player_id == 0:
                 action_type, bet_frac, _, _, _, _ = policy.act(state, deterministic=True)
             else:

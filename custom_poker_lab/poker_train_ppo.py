@@ -28,6 +28,9 @@ def run_episode(env: NoLimitHoldemEnv, policy: TwoHeadPolicy):
     state, player_id = env.reset()
 
     while not env.is_over():
+        if np.sum(state["legal_action_mask"]) == 0:
+            state, player_id = env.step(1, 0.0)
+            continue
         action_type, bet_frac, logprob, value, entropy, raise_mask = policy.act(state)
         buffers[player_id].add(
             state["obs"],

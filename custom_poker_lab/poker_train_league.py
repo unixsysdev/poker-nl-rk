@@ -30,6 +30,8 @@ class RandomPolicy:
     def act(self, state):
         legal = state["legal_action_mask"]
         actions = [i for i, v in enumerate(legal) if v > 0]
+        if not actions:
+            return 1, 0.0
         action_type = int(self.rng.choice(actions))
         bet_frac = float(self.rng.random())
         return action_type, bet_frac
@@ -39,6 +41,9 @@ def run_episode(env: NoLimitHoldemEnv, policies: list, learn_players: list[int])
     buffers = {pid: TrajectoryBuffer() for pid in learn_players}
     state, player_id = env.reset()
     while not env.is_over():
+        if np.sum(state["legal_action_mask"]) == 0:
+            state, player_id = env.step(1, 0.0)
+            continue
         policy = policies[player_id]
         if player_id in learn_players:
             action_type, bet_frac, logprob, value, entropy, raise_mask = policy.act(state)
@@ -321,7 +326,7 @@ def main():
 
     base_policy = TwoHeadPolicy(
         PolicyConfig(obs_dim=env_config_obs_dim(env_config), hidden_dim=args.hidden_dim),
-        device="cpu",
+        device=args.device,
     )
     if args.resume:
         state = torch.load(args.resume, map_location="cpu")

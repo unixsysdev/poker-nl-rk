@@ -218,6 +218,8 @@ set (fold / check-call / half-pot / pot / all-in).
 For a research-only multi-player NLHE environment with parameterized bet sizes,
 see `custom_poker_lab/README.md`.
 
+For the vectorized, high-throughput engine, see `custom_poker_lab/prod_lab/README.md`.
+
 Evaluate vs a local best-response proxy (LBR):
 
 ```bash
