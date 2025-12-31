@@ -1,0 +1,21 @@
+# Artifacts
+experiments/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pt
+*.pth
+*.pkl
+*.bin
+
+# Virtual envs
+.venv/
+.venv_*/
+venv/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
