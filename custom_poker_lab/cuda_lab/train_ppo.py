@@ -116,6 +116,7 @@ def main():
     parser.add_argument("--log-every-updates", type=int, default=5)
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--cpu-eval-workers", type=int, default=0)
+    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)
     parser.add_argument("--save-every", type=int, default=50000)
     parser.add_argument("--save-dir", default="experiments/cuda_nlhe_ppo")
     args = parser.parse_args()
@@ -139,6 +140,7 @@ def main():
         seed=args.seed,
         device=args.device,
         cpu_eval_workers=args.cpu_eval_workers,
+        cpu_eval_min_batch=args.cpu_eval_min_batch,
     )
     env = CudaNLHEEnv(env_config)
     policy = TwoHeadPolicy(

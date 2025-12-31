@@ -224,11 +224,14 @@ def main():
     parser.add_argument("--history-len", type=int, default=12)
     parser.add_argument("--hands-per-episode", type=int, default=1)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--cpu-eval-workers", type=int, default=0)
+    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)
     parser.add_argument("--opponent", choices=["random", "lbr", "dlbr", "proxy"], default="random")
     parser.add_argument("--lbr-rollouts", type=int, default=16)
     parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")
     parser.add_argument("--br-depth", type=int, default=2)
     parser.add_argument("--br-other-samples", type=int, default=1)
+    parser.add_argument("--log-every", type=int, default=0)
     args = parser.parse_args()
 
     state = torch.load(args.policy, map_location=args.device)
@@ -249,6 +252,8 @@ def main():
         hands_per_episode=args.hands_per_episode,
         seed=args.seed,
         device=args.device,
+        cpu_eval_workers=args.cpu_eval_workers,
+        cpu_eval_min_batch=args.cpu_eval_min_batch,
     )
     env = CudaNLHEEnv(env_config)
     policy = TwoHeadPolicy(PolicyConfig(obs_dim=env.obs_dim, hidden_dim=hidden_dim), device=args.device)
@@ -262,7 +267,7 @@ def main():
 
     def run_eval(opponent_type: str) -> float:
         returns = []
-        for _ in range(args.episodes):
+        for idx in range(args.episodes):
             env.reset()
             while not bool(env.episode_over[0].item()):
                 obs, mask, current = env.get_obs()
@@ -284,6 +289,11 @@ def main():
                     bet_fracs = torch.tensor([b_frac], device=env.device, dtype=torch.float32)
                 env.step(action_types, bet_fracs)
             returns.append(float(env.get_payoffs()[0, 0].item()))
+            if args.log_every and (idx + 1) % args.log_every == 0:
+                print(
+                    f"eval_progress opponent={opponent_type} episode={idx + 1}/{args.episodes}",
+                    flush=True,
+                )
         return float(np.mean(returns))
 
     if args.opponent == "proxy":

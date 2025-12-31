@@ -14,6 +14,14 @@ except ImportError as exc:  # pragma: no cover
     raise ImportError("treys is required. Install it with: pip install treys") from exc
 
 
+_EVAL = None
+
+
+def _init_eval_worker():
+    global _EVAL
+    _EVAL = Evaluator()
+
+
 @dataclass
 class CudaEnvConfig:
     batch_size: int = 64
@@ -32,11 +40,12 @@ class CudaEnvConfig:
     seed: int = 42
     device: str = "cuda"
     cpu_eval_workers: int = 0
+    cpu_eval_min_batch: int = 8
 
 
 def _score_payload(payload: Tuple[List[int], List[Tuple[int, List[int]]]]):
     board, hole_cards = payload
-    evaluator = Evaluator()
+    evaluator = _EVAL if _EVAL is not None else Evaluator()
     scores = []
     for player_idx, hole in hole_cards:
         scores.append((player_idx, evaluator.evaluate(board, hole)))
@@ -54,7 +63,10 @@ class CudaNLHEEnv:
         self.eval_pool = None
         if self.config.cpu_eval_workers and self.config.cpu_eval_workers > 0:
             ctx = mp.get_context("spawn")
-            self.eval_pool = ctx.Pool(processes=self.config.cpu_eval_workers)
+            self.eval_pool = ctx.Pool(
+                processes=self.config.cpu_eval_workers,
+                initializer=_init_eval_worker,
+            )
             atexit.register(self.eval_pool.close)
         self._allocate()
         self.reset()
@@ -283,8 +295,7 @@ class CudaNLHEEnv:
             return
         board = [int(c) for c in self.board[env].tolist() if c >= 0]
         holes = [(player, [int(c) for c in self.hole_cards[env, player].tolist() if c >= 0]) for player in active]
-        scores = _score_payload((board, holes))
-        score_map = {player: score for player, score in scores}
+        score_map = {player: self.evaluator.evaluate(board, hole) for player, hole in holes}
         self._resolve_showdown_with_scores(env, score_map)
 
     def _resolve_showdown_with_scores(self, env: int, score_map: dict[int, int]):
@@ -323,10 +334,15 @@ class CudaNLHEEnv:
             active = self._eligible_players(env)
             holes = [(player, [int(c) for c in self.hole_cards[env, player].tolist() if c >= 0]) for player in active]
             payloads.append((board, holes))
-        if self.eval_pool:
-            results = self.eval_pool.map(_score_payload, payloads)
+        use_pool = self.eval_pool and len(payloads) >= self.config.cpu_eval_min_batch
+        if use_pool:
+            chunksize = max(1, len(payloads) // max(1, self.config.cpu_eval_workers * 4))
+            results = self.eval_pool.map(_score_payload, payloads, chunksize=chunksize)
         else:
-            results = [_score_payload(payload) for payload in payloads]
+            results = []
+            for board, holes in payloads:
+                scores = [(player, self.evaluator.evaluate(board, hole)) for player, hole in holes]
+                results.append(scores)
         for env, scores in zip(env_indices, results):
             score_map = {player: score for player, score in scores}
             self._resolve_showdown_with_scores(env, score_map)

@@ -19,7 +19,10 @@ for NLHE experiments.
 ```bash
 python custom_poker_lab/prod_lab/train_ppo.py --batch-size 64 --num-players 6 \
   --episodes 200000 --rollout-episodes 4 --device cuda \
-  --log-every 10000 --save-every 50000 \
+  --log-every 10000 --profile \
+  --rollout-workers 4 \
+  --cpu-eval-workers 4 --cpu-eval-min-batch 16 \
+  --save-every 50000 \
   --save-dir experiments/prod_nlhe_ppo
 ```
 
@@ -56,7 +59,48 @@ python custom_poker_lab/prod_lab/eval.py \
 python custom_poker_lab/prod_lab/train_league.py --batch-size 64 --num-players 6 \
   --rounds 4 --population 6 --top-k 2 \
   --episodes-per-agent 20000 --rollout-episodes 4 --device cuda \
-  --eval-episodes 2000 --eval-opponent proxy \
+  --eval-episodes 2000 --eval-opponent proxy --profile \
+  --rollout-workers 4 \
+  --cpu-eval-workers 4 --cpu-eval-min-batch 16 \
   --pool-size 8 --pool-prob 0.5 \
   --save-dir experiments/prod_nlhe_league
+```
+
+## Multi-Run (Parallel Seeds)
+
+```bash
+python custom_poker_lab/prod_lab/run_multi.py --mode ppo --seeds 41,42,43 --parallel 2 -- \
+  --batch-size 256 --num-players 6 --rollout-episodes 8 --device cuda \
+  --save-dir experiments/prod_nlhe_ppo
+```
+
+Each seed gets its own `--save-dir` suffix (e.g., `_seed41`).
+
+## CodeClash Pipeline
+
+```bash
+bash custom_poker_lab/prod_lab/run_codeclash_pipeline.sh
+```
+
+The script uses defaults that match HuskyBench (stack 10k, blinds 5/10, 6 players,
+and a 1000-hand final phase). Override any value via environment variables, e.g.:
+
+```bash
+NUM_PLAYERS=6 HANDS_C=1000 EPISODES_C=120000 bash custom_poker_lab/prod_lab/run_codeclash_pipeline.sh
+```
+
+Checkpoint cadence can be adjusted per phase:
+
+```bash
+SAVE_EVERY_A=20000 SAVE_EVERY_B=20000 SAVE_EVERY_C=20000 \
+  bash custom_poker_lab/prod_lab/run_codeclash_pipeline.sh
+```
+
+## Select Best Checkpoint
+
+```bash
+python custom_poker_lab/prod_lab/select_best.py \
+  --checkpoint-dir experiments/prod_nlhe_ppo_phaseC \
+  --opponent proxy --episodes 2000 --parallel 4 \
+  --write-best experiments/prod_nlhe_ppo_phaseC/best.txt
 ```

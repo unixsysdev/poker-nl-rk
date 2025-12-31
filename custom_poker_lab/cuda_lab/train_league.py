@@ -293,6 +293,7 @@ def main():
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--cpu-eval-workers", type=int, default=0)
+    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)
     parser.add_argument("--eval-episodes", type=int, default=2000)
     parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="proxy")
     parser.add_argument("--lbr-rollouts", type=int, default=32)
@@ -324,6 +325,7 @@ def main():
         seed=args.seed,
         device=args.device,
         cpu_eval_workers=args.cpu_eval_workers,
+        cpu_eval_min_batch=args.cpu_eval_min_batch,
     )
 
     base_policy = TwoHeadPolicy(

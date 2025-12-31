@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import pathlib
 import sys
 import time
@@ -89,6 +90,107 @@ def ppo_update(policy, optimizer, batch, clip_ratio, value_coef, entropy_coef, e
             optimizer.step()
 
 
+def _split_batch_sizes(total: int, workers: int) -> list[int]:
+    if workers <= 1:
+        return [total]
+    base = total // workers
+    extra = total % workers
+    sizes = [base + 1 if i < extra else base for i in range(workers)]
+    return [size for size in sizes if size > 0]
+
+
+def collect_rollouts(
+    policy_state: dict,
+    env_config_dict: dict,
+    rollout_episodes: int,
+    seed: int,
+    hidden_dim: int,
+):
+    env_config = VectorEnvConfig(**env_config_dict)
+    env_config.seed = seed
+    policy = TwoHeadPolicy(
+        PolicyConfig(obs_dim=52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len, hidden_dim=hidden_dim),
+        device="cpu",
+    )
+    policy.load_state_dict(policy_state)
+    env = VectorNLHEEnv(env_config)
+
+    obs_np, mask_np, current_players = env.get_obs()
+    episode_steps = [[] for _ in range(env_config.batch_size)]
+    step_player_ids = []
+    returns = []
+    batch = TrajectoryBuffer()
+    episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)
+
+    with torch.no_grad():
+        while np.any(episodes_done < rollout_episodes):
+            active_envs = np.where(~env.episode_over)[0]
+            if active_envs.size == 0:
+                for env_idx in range(env_config.batch_size):
+                    if episodes_done[env_idx] < rollout_episodes:
+                        env.reset_at(env_idx)
+                obs_np, mask_np, current_players = env.get_obs()
+                continue
+            obs_active = obs_np[active_envs]
+            mask_active = mask_np[active_envs]
+
+            obs = torch.tensor(obs_active, dtype=torch.float32, device=policy.device)
+            masks = torch.tensor(mask_active, dtype=torch.float32, device=policy.device)
+            action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)
+
+            action_type_np = np.ones(env_config.batch_size, dtype=np.int64)
+            bet_frac_np = np.zeros(env_config.batch_size, dtype=np.float32)
+            action_type_np[active_envs] = action_type.detach().cpu().numpy()
+            bet_frac_np[active_envs] = bet_frac.detach().cpu().numpy()
+
+            for env_idx in active_envs:
+                step_player_ids.append(int(current_players[env_idx]))
+                returns.append(None)
+                episode_steps[env_idx].append(len(returns) - 1)
+
+            batch.obs.extend(obs_active)
+            batch.masks.extend(mask_active)
+            batch.action_types.extend(action_type.detach().cpu().numpy().tolist())
+            batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())
+            batch.logprobs.extend(logprob.detach().cpu())
+            batch.values.extend(value.detach().cpu())
+            batch.entropies.extend(entropy.detach().cpu())
+            batch.raise_masks.extend(raise_mask.detach().cpu().tolist())
+            batch.returns.extend([0.0] * obs_active.shape[0])
+
+            obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)
+
+            for env_idx in range(env_config.batch_size):
+                if env.episode_over[env_idx]:
+                    payoffs = env.get_payoffs()[env_idx]
+                    for idx in episode_steps[env_idx]:
+                        player = step_player_ids[idx]
+                        returns[idx] = float(payoffs[player])
+                    episode_steps[env_idx] = []
+                    episodes_done[env_idx] += 1
+                    if episodes_done[env_idx] < rollout_episodes:
+                        env.reset_at(env_idx)
+
+    for i, ret in enumerate(returns):
+        batch.returns[i] = 0.0 if ret is None else ret
+    return batch
+
+
+def merge_buffers(buffers: list[TrajectoryBuffer]) -> TrajectoryBuffer:
+    merged = TrajectoryBuffer()
+    for buf in buffers:
+        merged.obs.extend(buf.obs)
+        merged.masks.extend(buf.masks)
+        merged.action_types.extend(buf.action_types)
+        merged.bet_fracs.extend(buf.bet_fracs)
+        merged.logprobs.extend(buf.logprobs)
+        merged.values.extend(buf.values)
+        merged.entropies.extend(buf.entropies)
+        merged.raise_masks.extend(buf.raise_masks)
+        merged.returns.extend(buf.returns)
+    return merged
+
+
 def main():
     parser = argparse.ArgumentParser(description="Vectorized PPO for production-grade NLHE env.")
     parser.add_argument("--batch-size", type=int, default=64)
@@ -115,11 +217,15 @@ def main():
     parser.add_argument("--value-coef", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--rollout-workers", type=int, default=1)
     parser.add_argument("--log-every", type=int, default=10000)
     parser.add_argument("--log-every-updates", type=int, default=0)
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--cpu-eval-workers", type=int, default=0)
+    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)
     parser.add_argument("--save-every", type=int, default=50000)
     parser.add_argument("--save-dir", default="experiments/prod_nlhe_ppo")
+    parser.add_argument("--resume", default=None, help="Path to a checkpoint to resume from.")
     parser.add_argument("--eval-every", type=int, default=0)
     parser.add_argument("--eval-episodes", type=int, default=2000)
     parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="random")
@@ -145,6 +251,8 @@ def main():
         history_len=args.history_len,
         hands_per_episode=args.hands_per_episode,
         seed=args.seed,
+        cpu_eval_workers=args.cpu_eval_workers,
+        cpu_eval_min_batch=args.cpu_eval_min_batch,
     )
     env = VectorNLHEEnv(env_config)
     policy = TwoHeadPolicy(
@@ -154,6 +262,27 @@ def main():
     optimizer = optim.Adam(policy.parameters(), lr=args.lr)
 
     total_episodes = 0
+    update_idx = 0
+    next_save = args.save_every if args.save_every else None
+    if args.resume:
+        resume_path = pathlib.Path(args.resume)
+        if not resume_path.exists():
+            raise SystemExit(f"resume_not_found={resume_path}")
+        checkpoint = torch.load(resume_path, map_location=args.device)
+        state_dict = checkpoint.get("model", checkpoint)
+        policy.load_state_dict(state_dict)
+        total_episodes = int(checkpoint.get("episodes", 0))
+        if "hidden_dim" in checkpoint:
+            args.hidden_dim = int(checkpoint["hidden_dim"])
+        if "optimizer" in checkpoint:
+            try:
+                optimizer.load_state_dict(checkpoint["optimizer"])
+            except Exception:
+                print("resume_note=optimizer_state_load_failed", flush=True)
+        if args.save_every:
+            next_save = ((total_episodes // args.save_every) + 1) * args.save_every
+        update_idx = int(total_episodes // max(1, args.batch_size * args.rollout_episodes))
+        print(f"resume_from={resume_path} episodes={total_episodes}", flush=True)
     start = time.time()
     print(
         "train_start "
@@ -165,81 +294,102 @@ def main():
         flush=True,
     )
 
-    obs_np, mask_np, current_players = env.get_obs()
-    episode_steps = [[] for _ in range(env_config.batch_size)]
-    step_env_ids = []
-    step_player_ids = []
-    returns = []
+    rollout_pool = None
+    batch_sizes = _split_batch_sizes(args.batch_size, args.rollout_workers)
+    if args.rollout_workers > 1:
+        ctx = mp.get_context("spawn")
+        rollout_pool = ctx.Pool(processes=args.rollout_workers)
+    else:
+        obs_np, mask_np, current_players = env.get_obs()
 
-    update_idx = 0
     while total_episodes < args.episodes:
-        batch = TrajectoryBuffer()
-        episode_steps = [[] for _ in range(env_config.batch_size)]
-        step_env_ids = []
-        step_player_ids = []
-        returns = []
-        episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)
-
         rollout_start = time.time()
-        while np.any(episodes_done < args.rollout_episodes):
-            active_envs = np.where(~env.episode_over)[0]
-            if active_envs.size == 0:
+        if rollout_pool:
+            policy_state = {k: v.detach().cpu() for k, v in policy.state_dict().items()}
+            payloads = []
+            for i, batch_size in enumerate(batch_sizes):
+                worker_config = env_config.__dict__.copy()
+                worker_config["batch_size"] = batch_size
+                worker_config["seed"] = args.seed + update_idx * args.rollout_workers + i
+                worker_config["cpu_eval_workers"] = 0
+                payloads.append(
+                    (
+                        policy_state,
+                        worker_config,
+                        args.rollout_episodes,
+                        worker_config["seed"],
+                        args.hidden_dim,
+                    )
+                )
+            buffers = rollout_pool.starmap(collect_rollouts, payloads)
+            batch = merge_buffers(buffers)
+            if not batch.obs:
+                continue
+            total_episodes += int(sum(batch_sizes) * args.rollout_episodes)
+        else:
+            batch = TrajectoryBuffer()
+            episode_steps = [[] for _ in range(env_config.batch_size)]
+            step_player_ids = []
+            returns = []
+            episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)
+
+            while np.any(episodes_done < args.rollout_episodes):
+                active_envs = np.where(~env.episode_over)[0]
+                if active_envs.size == 0:
+                    for env_idx in range(env_config.batch_size):
+                        if episodes_done[env_idx] < args.rollout_episodes:
+                            env.reset_at(env_idx)
+                    obs_np, mask_np, current_players = env.get_obs()
+                    continue
+                obs_active = obs_np[active_envs]
+                mask_active = mask_np[active_envs]
+
+                obs = torch.tensor(obs_active, dtype=torch.float32, device=policy.device)
+                masks = torch.tensor(mask_active, dtype=torch.float32, device=policy.device)
+                action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)
+
+                action_type_np = np.ones(env_config.batch_size, dtype=np.int64)
+                bet_frac_np = np.zeros(env_config.batch_size, dtype=np.float32)
+                action_type_np[active_envs] = action_type.detach().cpu().numpy()
+                bet_frac_np[active_envs] = bet_frac.detach().cpu().numpy()
+
+                for env_idx in active_envs:
+                    step_player_ids.append(int(current_players[env_idx]))
+                    returns.append(None)
+                    episode_steps[env_idx].append(len(returns) - 1)
+
+                batch.obs.extend(obs_active)
+                batch.masks.extend(mask_active)
+                batch.action_types.extend(action_type.detach().cpu().numpy().tolist())
+                batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())
+                batch.logprobs.extend(logprob.detach().cpu())
+                batch.values.extend(value.detach().cpu())
+                batch.entropies.extend(entropy.detach().cpu())
+                batch.raise_masks.extend(raise_mask.detach().cpu().tolist())
+                batch.returns.extend([0.0] * obs_active.shape[0])
+
+                obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)
+
                 for env_idx in range(env_config.batch_size):
-                    if episodes_done[env_idx] < args.rollout_episodes:
-                        env.reset_at(env_idx)
+                    if env.episode_over[env_idx]:
+                        payoffs = env.get_payoffs()[env_idx]
+                        for idx in episode_steps[env_idx]:
+                            player = step_player_ids[idx]
+                            returns[idx] = float(payoffs[player])
+                        episode_steps[env_idx] = []
+                        episodes_done[env_idx] += 1
+                        if episodes_done[env_idx] < args.rollout_episodes:
+                            env.reset_at(env_idx)
+
+            for i, ret in enumerate(returns):
+                batch.returns[i] = 0.0 if ret is None else ret
+
+            if not batch.obs:
                 obs_np, mask_np, current_players = env.get_obs()
                 continue
-            obs_active = obs_np[active_envs]
-            mask_active = mask_np[active_envs]
 
-            obs = torch.tensor(obs_active, dtype=torch.float32, device=policy.device)
-            masks = torch.tensor(mask_active, dtype=torch.float32, device=policy.device)
-            action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)
+            total_episodes += int(env_config.batch_size * args.rollout_episodes)
 
-            action_type_np = np.ones(env_config.batch_size, dtype=np.int64)
-            bet_frac_np = np.zeros(env_config.batch_size, dtype=np.float32)
-            action_type_np[active_envs] = action_type.detach().cpu().numpy()
-            bet_frac_np[active_envs] = bet_frac.detach().cpu().numpy()
-
-            for idx, env_idx in enumerate(active_envs):
-                step_env_ids.append(int(env_idx))
-                step_player_ids.append(int(current_players[env_idx]))
-                returns.append(None)
-                episode_steps[env_idx].append(len(returns) - 1)
-
-            batch.obs.extend(obs_active)
-            batch.masks.extend(mask_active)
-            batch.action_types.extend(action_type.detach().cpu().numpy().tolist())
-            batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())
-            batch.logprobs.extend(logprob.detach().cpu())
-            batch.values.extend(value.detach().cpu())
-            batch.entropies.extend(entropy.detach().cpu())
-            batch.raise_masks.extend(raise_mask.detach().cpu().tolist())
-            batch.returns.extend([0.0] * obs_active.shape[0])
-
-            obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)
-
-            for env_idx in range(env_config.batch_size):
-                if env.episode_over[env_idx]:
-                    payoffs = env.get_payoffs()[env_idx]
-                    for idx in episode_steps[env_idx]:
-                        player = step_player_ids[idx]
-                        returns[idx] = float(payoffs[player])
-                    episode_steps[env_idx] = []
-                    episodes_done[env_idx] += 1
-                    if episodes_done[env_idx] < args.rollout_episodes:
-                        env.reset_at(env_idx)
-
-        for i, ret in enumerate(returns):
-            if ret is None:
-                ret = 0.0
-            batch.returns[i] = ret
-
-        if not batch.obs:
-            obs_np, mask_np, current_players = env.get_obs()
-            continue
-
-        total_episodes += int(env_config.batch_size * args.rollout_episodes)
         batch_tensors = batch.as_tensors(policy.device)
         update_start = time.time()
         ppo_update(
@@ -279,21 +429,24 @@ def main():
                 msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"
             print(msg, flush=True)
 
-        if args.save_every and total_episodes % args.save_every == 0:
-            save_dir = pathlib.Path(args.save_dir)
-            save_dir.mkdir(parents=True, exist_ok=True)
-            path = save_dir / f"policy_ep_{total_episodes:06d}.pt"
-            torch.save(
-                {
-                    "model": policy.state_dict(),
-                    "episodes": total_episodes,
-                    "obs_dim": env.obs_dim,
-                    "config": env_config.__dict__,
-                    "hidden_dim": args.hidden_dim,
-                },
-                path,
-            )
-            print(f"checkpoint_saved={path}")
+        if next_save is not None:
+            while total_episodes >= next_save:
+                save_dir = pathlib.Path(args.save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                path = save_dir / f"policy_ep_{next_save:06d}.pt"
+                torch.save(
+                    {
+                        "model": policy.state_dict(),
+                        "episodes": next_save,
+                        "obs_dim": env.obs_dim,
+                        "config": env_config.__dict__,
+                        "hidden_dim": args.hidden_dim,
+                        "optimizer": optimizer.state_dict(),
+                    },
+                    path,
+                )
+                print(f"checkpoint_saved={path}")
+                next_save += args.save_every
 
         if args.eval_every and total_episodes % args.eval_every == 0:
             bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]
@@ -306,6 +459,10 @@ def main():
                 lbr_bet_fracs=bet_fracs,
             )
             print(f"eval@{total_episodes} opponent={args.eval_opponent} avg_return={score:.4f}", flush=True)
+
+    if rollout_pool:
+        rollout_pool.close()
+        rollout_pool.join()
 
 
 if __name__ == "__main__":

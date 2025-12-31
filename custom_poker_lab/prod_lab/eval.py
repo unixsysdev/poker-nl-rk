@@ -205,6 +205,7 @@ def _evaluate_single(
     lbr_bet_fracs: list[float],
     br_depth: int,
     br_other_samples: int,
+    log_every: int = 0,
 ):
     if lbr_bet_fracs is None:
         lbr_bet_fracs = [0.25, 0.5, 1.0]
@@ -223,7 +224,7 @@ def _evaluate_single(
     )
 
     returns = []
-    for _ in range(episodes):
+    for idx in range(episodes):
         env.reset()
         while not env.episode_over[0]:
             obs, mask, player = env.get_obs()
@@ -239,6 +240,8 @@ def _evaluate_single(
                     action_type, bet_frac = random_policy.act(obs[0], mask[0])
             env.step(np.array([action_type]), np.array([bet_frac]))
         returns.append(env.get_payoffs()[0, 0])
+        if log_every and (idx + 1) % log_every == 0:
+            print(f"eval_progress opponent={opponent} episode={idx + 1}/{episodes}", flush=True)
     return float(np.mean(returns))
 
 
@@ -251,6 +254,7 @@ def evaluate(
     lbr_bet_fracs: list[float] | None = None,
     br_depth: int = 2,
     br_other_samples: int = 1,
+    log_every: int = 0,
 ):
     if lbr_bet_fracs is None:
         lbr_bet_fracs = [0.25, 0.5, 1.0]
@@ -264,6 +268,7 @@ def evaluate(
             lbr_bet_fracs=lbr_bet_fracs,
             br_depth=br_depth,
             br_other_samples=br_other_samples,
+            log_every=log_every,
         )
         lbr_score = _evaluate_single(
             policy_ref,
@@ -274,6 +279,7 @@ def evaluate(
             lbr_bet_fracs=lbr_bet_fracs,
             br_depth=br_depth,
             br_other_samples=br_other_samples,
+            log_every=log_every,
         )
         return float(min(random_score, lbr_score))
     return _evaluate_single(
@@ -285,6 +291,7 @@ def evaluate(
         lbr_bet_fracs=lbr_bet_fracs,
         br_depth=br_depth,
         br_other_samples=br_other_samples,
+        log_every=log_every,
     )
 
 
@@ -298,6 +305,7 @@ def main():
     parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")
     parser.add_argument("--br-depth", type=int, default=2)
     parser.add_argument("--br-other-samples", type=int, default=1)
+    parser.add_argument("--log-every", type=int, default=0)
     parser.add_argument("--num-players", type=int, default=6)
     parser.add_argument("--stack", type=int, default=20000)
     parser.add_argument("--small-blind", type=int, default=50)
@@ -310,6 +318,8 @@ def main():
     parser.add_argument("--rake-cap-street", type=int, default=0)
     parser.add_argument("--history-len", type=int, default=12)
     parser.add_argument("--hands-per-episode", type=int, default=1)
+    parser.add_argument("--cpu-eval-workers", type=int, default=0)
+    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)
     args = parser.parse_args()
 
     bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]
@@ -328,6 +338,8 @@ def main():
         history_len=args.history_len,
         hands_per_episode=args.hands_per_episode,
         seed=args.seed,
+        cpu_eval_workers=args.cpu_eval_workers,
+        cpu_eval_min_batch=args.cpu_eval_min_batch,
     )
     score = evaluate(
         args.policy,
@@ -338,6 +350,7 @@ def main():
         lbr_bet_fracs=bet_fracs,
         br_depth=args.br_depth,
         br_other_samples=args.br_other_samples,
+        log_every=args.log_every,
     )
     print(f"avg_return={score:.4f}")
 

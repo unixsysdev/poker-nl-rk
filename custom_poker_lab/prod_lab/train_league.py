@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import pathlib
 import sys
 import time
@@ -104,6 +105,61 @@ def ppo_update(policy, optimizer, batch, clip_ratio, value_coef, entropy_coef, e
             optimizer.step()
 
 
+def _split_batch_sizes(total: int, workers: int) -> list[int]:
+    if workers <= 1:
+        return [total]
+    base = total // workers
+    extra = total % workers
+    sizes = [base + 1 if i < extra else base for i in range(workers)]
+    return [size for size in sizes if size > 0]
+
+
+def collect_rollouts_league(
+    policy_state: dict,
+    env_config_dict: dict,
+    rollout_episodes: int,
+    seed: int,
+    hidden_dim: int,
+    pool_states: list[dict],
+    opponent_prob: float,
+):
+    env_config = VectorEnvConfig(**env_config_dict)
+    env_config.seed = seed
+    policy = TwoHeadPolicy(
+        PolicyConfig(obs_dim=52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len, hidden_dim=hidden_dim),
+        device="cpu",
+    )
+    policy.load_state_dict(policy_state)
+
+    opponent_policies = []
+    for state in pool_states:
+        opp = TwoHeadPolicy(
+            PolicyConfig(obs_dim=52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len, hidden_dim=hidden_dim),
+            device="cpu",
+        )
+        opp.load_state_dict(state)
+        opponent_policies.append(opp)
+
+    rng = np.random.default_rng(seed)
+    env = VectorNLHEEnv(env_config)
+    return rollout_episode_steps(env, policy, opponent_policies, opponent_prob, rng, rollout_episodes)
+
+
+def merge_buffers(buffers: list[TrajectoryBuffer]) -> TrajectoryBuffer:
+    merged = TrajectoryBuffer()
+    for buf in buffers:
+        merged.obs.extend(buf.obs)
+        merged.masks.extend(buf.masks)
+        merged.action_types.extend(buf.action_types)
+        merged.bet_fracs.extend(buf.bet_fracs)
+        merged.logprobs.extend(buf.logprobs)
+        merged.values.extend(buf.values)
+        merged.entropies.extend(buf.entropies)
+        merged.raise_masks.extend(buf.raise_masks)
+        merged.returns.extend(buf.returns)
+    return merged
+
+
 def rollout_episode_steps(
     env: VectorNLHEEnv,
     policy: TwoHeadPolicy,
@@ -197,6 +253,8 @@ def train_candidate(
     env_config: VectorEnvConfig,
     args,
     pool_states: list[dict],
+    rollout_pool,
+    batch_sizes: list[int],
 ):
     policy = TwoHeadPolicy(
         PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim),
@@ -215,18 +273,44 @@ def train_candidate(
     total_episodes = 0
     updates = 0
     while total_episodes < args.episodes_per_agent:
-        batch = rollout_episode_steps(
-            env,
-            policy,
-            opponent_policies,
-            args.pool_prob,
-            np.random.default_rng(args.seed),
-            episodes_per_env=args.rollout_episodes,
-        )
+        rollout_start = time.time()
+        if rollout_pool:
+            policy_state = {k: v.detach().cpu() for k, v in policy.state_dict().items()}
+            payloads = []
+            for i, batch_size in enumerate(batch_sizes):
+                worker_config = env_config.__dict__.copy()
+                worker_config["batch_size"] = batch_size
+                worker_config["seed"] = args.seed + updates * args.rollout_workers + i
+                worker_config["cpu_eval_workers"] = 0
+                payloads.append(
+                    (
+                        policy_state,
+                        worker_config,
+                        args.rollout_episodes,
+                        worker_config["seed"],
+                        args.hidden_dim,
+                        pool_states,
+                        args.pool_prob,
+                    )
+                )
+            buffers = rollout_pool.starmap(collect_rollouts_league, payloads)
+            batch = merge_buffers(buffers)
+            total_episodes += int(sum(batch_sizes) * args.rollout_episodes)
+        else:
+            batch = rollout_episode_steps(
+                env,
+                policy,
+                opponent_policies,
+                args.pool_prob,
+                np.random.default_rng(args.seed),
+                episodes_per_env=args.rollout_episodes,
+            )
+            total_episodes += int(env_config.batch_size * args.rollout_episodes)
+        rollout_elapsed = time.time() - rollout_start
         if not batch.obs:
             env.reset()
             continue
-        total_episodes += int(env_config.batch_size * args.rollout_episodes)
+        update_start = time.time()
         batch_tensors = batch.as_tensors(policy.device)
         ppo_update(
             policy,
@@ -238,9 +322,18 @@ def train_candidate(
             epochs=args.ppo_epochs,
             minibatch=args.minibatch,
         )
+        update_elapsed = time.time() - update_start
         updates += 1
         if args.log_every and updates % args.log_every == 0:
-            print(f"candidate_updates={updates} episodes={total_episodes}", flush=True)
+            msg = (
+                f"candidate_updates={updates} episodes={total_episodes} "
+                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"
+            )
+            if args.profile:
+                samples = len(batch.obs)
+                total_sec = max(1e-6, rollout_elapsed + update_elapsed)
+                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"
+            print(msg, flush=True)
 
     return policy.state_dict()
 
@@ -275,6 +368,9 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--rollout-workers", type=int, default=1)
+    parser.add_argument("--cpu-eval-workers", type=int, default=0)
+    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)
     parser.add_argument("--eval-episodes", type=int, default=2000)
     parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="proxy")
     parser.add_argument("--lbr-rollouts", type=int, default=32)
@@ -304,7 +400,15 @@ def main():
         history_len=args.history_len,
         hands_per_episode=args.hands_per_episode,
         seed=args.seed,
+        cpu_eval_workers=args.cpu_eval_workers,
+        cpu_eval_min_batch=args.cpu_eval_min_batch,
     )
+
+    rollout_pool = None
+    batch_sizes = _split_batch_sizes(args.batch_size, args.rollout_workers)
+    if args.rollout_workers > 1:
+        ctx = mp.get_context("spawn")
+        rollout_pool = ctx.Pool(processes=args.rollout_workers)
 
     base_policy = TwoHeadPolicy(
         PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim),
@@ -330,7 +434,7 @@ def main():
         scores = []
         for agent_idx in range(args.population):
             train_start = time.time()
-            trained_state = train_candidate(base_state, env_config, args, pool_states)
+            trained_state = train_candidate(base_state, env_config, args, pool_states, rollout_pool, batch_sizes)
             train_elapsed = time.time() - train_start
             candidates.append(trained_state)
             eval_start = time.time()
@@ -384,6 +488,10 @@ def main():
             )
         else:
             print(f"round_end={round_idx} best_score={best_score:.4f}", flush=True)
+
+    if rollout_pool:
+        rollout_pool.close()
+        rollout_pool.join()
 
 
 if __name__ == "__main__":

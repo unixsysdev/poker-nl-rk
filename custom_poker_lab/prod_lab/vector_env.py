@@ -3,12 +3,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple
 
+import atexit
+import multiprocessing as mp
 import numpy as np
 
 try:
     from treys import Deck, Evaluator
 except ImportError as exc:  # pragma: no cover
     raise ImportError("treys is required. Install it with: pip install treys") from exc
+
+
+_EVAL = None
+
+
+def _init_eval_worker():
+    global _EVAL
+    _EVAL = Evaluator()
+
+
+def _score_payload(payload: Tuple[List[int], List[Tuple[int, List[int]]]]):
+    board, hole_cards = payload
+    evaluator = _EVAL if _EVAL is not None else Evaluator()
+    scores = []
+    for player_idx, hole in hole_cards:
+        scores.append((player_idx, evaluator.evaluate(board, hole)))
+    return scores
 
 
 @dataclass
@@ -27,6 +46,8 @@ class VectorEnvConfig:
     history_len: int = 12
     hands_per_episode: int = 1
     seed: int = 42
+    cpu_eval_workers: int = 0
+    cpu_eval_min_batch: int = 8
 
 
 class VectorNLHEEnv:
@@ -37,8 +58,21 @@ class VectorNLHEEnv:
         self.full_deck = np.array(Deck.GetFullDeck(), dtype=np.int64)
         self.card_index = {int(card): idx for idx, card in enumerate(self.full_deck)}
         self.obs_dim = 52 + 5 + 7 * self.config.num_players + 4 * self.config.history_len
+        self.eval_pool = None
+        if self.config.cpu_eval_workers and self.config.cpu_eval_workers > 0:
+            ctx = mp.get_context("spawn")
+            self.eval_pool = ctx.Pool(
+                processes=self.config.cpu_eval_workers,
+                initializer=_init_eval_worker,
+            )
+            atexit.register(self.eval_pool.close)
         self._allocate()
         self.reset()
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["eval_pool"] = None
+        return state
 
     def _allocate(self):
         b = self.config.batch_size
@@ -255,9 +289,17 @@ class VectorNLHEEnv:
         active = self._eligible_players(env)
         if not active:
             return
+        board = [int(c) for c in self.board[env] if c >= 0]
+        holes = [(player, [int(c) for c in self.hole_cards[env, player] if c >= 0]) for player in active]
+        score_map = {player: self.evaluator.evaluate(board, hole) for player, hole in holes}
+        self._resolve_showdown_with_scores(env, score_map)
 
+    def _resolve_showdown_with_scores(self, env: int, score_map: dict[int, int]):
+        active = self._eligible_players(env)
+        if not active:
+            return
         contributions = self.in_pot[env].tolist()
-        levels = sorted({c for c in contributions if c > 0})
+        levels = sorted({int(c) for c in contributions if c > 0})
         prev = 0
         for level in levels:
             pot = (level - prev) * sum(1 for c in contributions if c >= level)
@@ -266,13 +308,8 @@ class VectorNLHEEnv:
             if not eligible:
                 prev = level
                 continue
-            scores = []
-            board = [int(c) for c in self.board[env] if c >= 0]
-            for player in eligible:
-                hole = [int(c) for c in self.hole_cards[env, player] if c >= 0]
-                scores.append((self.evaluator.evaluate(board, hole), player))
-            best = min(scores, key=lambda x: x[0])[0]
-            winners = [i for score, i in scores if score == best]
+            best = min(score_map[i] for i in eligible)
+            winners = [i for i in eligible if score_map[i] == best]
             share = pot // len(winners)
             remainder = pot - share * len(winners)
             for player in winners:
@@ -283,6 +320,30 @@ class VectorNLHEEnv:
                 )
                 self.stacks[env, winners_sorted[0]] += remainder
             prev = level
+
+    def _resolve_showdowns(self, env_indices: List[int]):
+        if not env_indices:
+            return
+        payloads = []
+        for env in env_indices:
+            board = [int(c) for c in self.board[env] if c >= 0]
+            active = self._eligible_players(env)
+            holes = [(player, [int(c) for c in self.hole_cards[env, player] if c >= 0]) for player in active]
+            payloads.append((board, holes))
+
+        use_pool = self.eval_pool and len(payloads) >= self.config.cpu_eval_min_batch
+        if use_pool:
+            chunksize = max(1, len(payloads) // max(1, self.config.cpu_eval_workers * 4))
+            results = self.eval_pool.map(_score_payload, payloads, chunksize=chunksize)
+        else:
+            results = []
+            for board, holes in payloads:
+                scores = [(player, self.evaluator.evaluate(board, hole)) for player, hole in holes]
+                results.append(scores)
+
+        for env, scores in zip(env_indices, results):
+            score_map = {player: score for player, score in scores}
+            self._resolve_showdown_with_scores(env, score_map)
 
     def _finish_hand(self, env: int):
         self.hands_left[env] -= 1
@@ -382,6 +443,7 @@ class VectorNLHEEnv:
 
     def step(self, action_types: np.ndarray, bet_fracs: np.ndarray):
         b = self.config.batch_size
+        showdown_envs: List[int] = []
         for env in range(b):
             if self.episode_over[env]:
                 continue
@@ -390,8 +452,7 @@ class VectorNLHEEnv:
                 while self.round_index[env] < 3:
                     self._advance_round(env)
                 self.round_index[env] = 4
-                self._resolve_showdown(env)
-                self._finish_hand(env)
+                showdown_envs.append(env)
                 continue
 
             player = int(self.current_player[env])
@@ -453,8 +514,7 @@ class VectorNLHEEnv:
                 while self.round_index[env] < 3:
                     self._advance_round(env)
                 self.round_index[env] = 4
-                self._resolve_showdown(env)
-                self._finish_hand(env)
+                showdown_envs.append(env)
                 continue
 
             if not self.pending[env].any():
@@ -462,11 +522,15 @@ class VectorNLHEEnv:
                     self._advance_round(env)
                 else:
                     self.round_index[env] = 4
-                    self._resolve_showdown(env)
-                    self._finish_hand(env)
+                    showdown_envs.append(env)
                 continue
 
             self.current_player[env] = self._next_player(env, player)
+
+        if showdown_envs:
+            self._resolve_showdowns(showdown_envs)
+            for env in showdown_envs:
+                self._finish_hand(env)
 
         return self.get_obs()
 

@@ -12,6 +12,7 @@ python custom_poker_lab/cuda_lab/train_ppo.py --batch-size 256 --num-players 6 \
   --episodes 400000 --rollout-episodes 8 --device cuda \
   --ppo-epochs 8 --minibatch 8192 \
   --cpu-eval-workers 4 \
+  --cpu-eval-min-batch 16 \
   --save-every 100000 --save-dir experiments/cuda_nlhe_ppo
 ```
 
@@ -41,6 +42,7 @@ python custom_poker_lab/cuda_lab/train_league.py --batch-size 128 --num-players 
   --episodes-per-agent 20000 --rollout-episodes 4 --device cuda \
   --eval-episodes 2000 --eval-opponent proxy \
   --cpu-eval-workers 4 \
+  --cpu-eval-min-batch 16 \
   --pool-size 8 --pool-prob 0.5 \
   --save-dir experiments/cuda_nlhe_league
 ```
@@ -49,3 +51,5 @@ Notes:
 - Continuous raise sizing: bet fraction scales **from min-raise to all-in**.
 - Hand evaluation is still CPU (Treys). Replace with a GPU evaluator for full
   end-to-end CUDA rollouts.
+- If CPU showdown parallelism slows things down, lower `--cpu-eval-workers` or
+  raise `--cpu-eval-min-batch` so small batches run inline.

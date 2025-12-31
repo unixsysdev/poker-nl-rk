@@ -1,0 +1,990 @@
+# prod_lab Training Code: Full Line-by-Line Walkthrough
+
+This document provides a literal, line-by-line explanation of:
+- `custom_poker_lab/prod_lab/train_ppo.py`
+- `custom_poker_lab/prod_lab/train_league.py`
+
+If the code changes, line numbers will drift.
+
+---
+
+## `custom_poker_lab/prod_lab/train_ppo.py`
+
+Source: `/home/marcel/Work/Poker/custom_poker_lab/prod_lab/train_ppo.py`
+
+Line-by-line notes:
+
+- L001: `from __future__ import annotations` — Enables postponed evaluation of type hints.
+- L002: `(blank)` — Blank line for readability.
+- L003: `import argparse` — Import statement; brings in modules needed later.
+- L004: `import multiprocessing as mp` — Import statement; brings in modules needed later.
+- L005: `import pathlib` — Import statement; brings in modules needed later.
+- L006: `import sys` — Import statement; brings in modules needed later.
+- L007: `import time` — Import statement; brings in modules needed later.
+- L008: `(blank)` — Blank line for readability.
+- L009: `import numpy as np` — Import statement; brings in modules needed later.
+- L010: `import torch` — Import statement; brings in modules needed later.
+- L011: `from torch import nn, optim` — Import statement; brings in modules needed later.
+- L012: `(blank)` — Blank line for readability.
+- L013: `ROOT = pathlib.Path(__file__).resolve().parents[2]` — Assignment or configuration line; sets or updates a value.
+- L014: `if str(ROOT) not in sys.path:` — Conditional branch; runs the following block when the condition is true.
+- L015: `    sys.path.insert(0, str(ROOT))` — Statement line; performs work as part of the current block.
+- L016: `(blank)` — Blank line for readability.
+- L017: `from custom_poker_lab.poker_policy import PolicyConfig, TwoHeadPolicy, TrajectoryBuffer` — Import statement; brings in modules needed later.
+- L018: `from custom_poker_lab.prod_lab.vector_env import VectorEnvConfig, VectorNLHEEnv` — Import statement; brings in modules needed later.
+- L019: `from custom_poker_lab.prod_lab import eval as evaler` — Import statement; brings in modules needed later.
+- L020: `(blank)` — Blank line for readability.
+- L021: `(blank)` — Blank line for readability.
+- L022: `def sample_actions(policy: TwoHeadPolicy, obs: torch.Tensor, mask: torch.Tensor):` — Function definition for `sample_actions`.
+- L023: `    type_logits, size_params, value = policy.net(obs)` — Assignment or configuration line; sets or updates a value.
+- L024: `    type_logits = type_logits.masked_fill(mask == 0, -1e9)` — Statement line; performs work as part of the current block.
+- L025: `    type_dist = torch.distributions.Categorical(logits=type_logits)` — Assignment or configuration line; sets or updates a value.
+- L026: `    action_type = type_dist.sample()` — Assignment or configuration line; sets or updates a value.
+- L027: `    logprob_type = type_dist.log_prob(action_type)` — Assignment or configuration line; sets or updates a value.
+- L028: `    entropy_type = type_dist.entropy()` — Assignment or configuration line; sets or updates a value.
+- L029: `(blank)` — Blank line for readability.
+- L030: `    alpha = torch.nn.functional.softplus(size_params[:, 0]) + 1.0` — Assignment or configuration line; sets or updates a value.
+- L031: `    beta = torch.nn.functional.softplus(size_params[:, 1]) + 1.0` — Assignment or configuration line; sets or updates a value.
+- L032: `    size_dist = torch.distributions.Beta(alpha, beta)` — Assignment or configuration line; sets or updates a value.
+- L033: `    bet_frac = size_dist.sample().clamp(0.0, 1.0)` — Assignment or configuration line; sets or updates a value.
+- L034: `    logprob_size = size_dist.log_prob(bet_frac)` — Assignment or configuration line; sets or updates a value.
+- L035: `    entropy_size = size_dist.entropy()` — Assignment or configuration line; sets or updates a value.
+- L036: `(blank)` — Blank line for readability.
+- L037: `    raise_mask = (action_type == 2).float()` — Statement line; performs work as part of the current block.
+- L038: `    logprob = logprob_type + raise_mask * logprob_size` — Assignment or configuration line; sets or updates a value.
+- L039: `    entropy = entropy_type + raise_mask * entropy_size` — Assignment or configuration line; sets or updates a value.
+- L040: `(blank)` — Blank line for readability.
+- L041: `    return action_type, bet_frac, logprob, value, entropy, raise_mask` — Return statement; sends a value back to the caller.
+- L042: `(blank)` — Blank line for readability.
+- L043: `(blank)` — Blank line for readability.
+- L044: `def ppo_update(policy, optimizer, batch, clip_ratio, value_coef, entropy_coef, epochs, minibatch):` — Function definition for `ppo_update`.
+- L045: `    (` — Closes a previous block or literal.
+- L046: `        obs,` — Statement line; performs work as part of the current block.
+- L047: `        masks,` — Statement line; performs work as part of the current block.
+- L048: `        action_types,` — Statement line; performs work as part of the current block.
+- L049: `        bet_fracs,` — Statement line; performs work as part of the current block.
+- L050: `        old_logprobs,` — Statement line; performs work as part of the current block.
+- L051: `        values,` — Statement line; performs work as part of the current block.
+- L052: `        entropies,` — Statement line; performs work as part of the current block.
+- L053: `        raise_masks,` — Statement line; performs work as part of the current block.
+- L054: `        returns,` — Return statement; sends a value back to the caller.
+- L055: `    ) = batch` — Closes a previous block or literal.
+- L056: `    advantages = returns - values` — Assignment or configuration line; sets or updates a value.
+- L057: `    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)` — Assignment or configuration line; sets or updates a value.
+- L058: `(blank)` — Blank line for readability.
+- L059: `    n = obs.shape[0]` — Assignment or configuration line; sets or updates a value.
+- L060: `    idx = torch.randperm(n, device=obs.device)` — Assignment or configuration line; sets or updates a value.
+- L061: `    for _ in range(epochs):` — Loop; repeats the block for each item.
+- L062: `        for start in range(0, n, minibatch):` — Loop; repeats the block for each item.
+- L063: `            end = start + minibatch` — Assignment or configuration line; sets or updates a value.
+- L064: `            mb_idx = idx[start:end]` — Assignment or configuration line; sets or updates a value.
+- L065: `            mb_obs = obs[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L066: `            mb_masks = masks[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L067: `            mb_actions = action_types[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L068: `            mb_bet_fracs = bet_fracs[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L069: `            mb_old_logprobs = old_logprobs[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L070: `            mb_returns = returns[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L071: `            mb_adv = advantages[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L072: `            mb_raise_masks = raise_masks[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L073: `(blank)` — Blank line for readability.
+- L074: `            logprob, entropy, value = policy.evaluate_actions(` — Assignment or configuration line; sets or updates a value.
+- L075: `                mb_obs,` — Statement line; performs work as part of the current block.
+- L076: `                mb_masks,` — Statement line; performs work as part of the current block.
+- L077: `                mb_actions,` — Statement line; performs work as part of the current block.
+- L078: `                mb_bet_fracs,` — Statement line; performs work as part of the current block.
+- L079: `                mb_raise_masks,` — Statement line; performs work as part of the current block.
+- L080: `            )` — Closes a previous block or literal.
+- L081: `            ratio = torch.exp(logprob - mb_old_logprobs)` — Assignment or configuration line; sets or updates a value.
+- L082: `            clipped = torch.clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio)` — Assignment or configuration line; sets or updates a value.
+- L083: `            policy_loss = -(torch.min(ratio * mb_adv, clipped * mb_adv)).mean()` — Assignment or configuration line; sets or updates a value.
+- L084: `            value_loss = nn.functional.mse_loss(value, mb_returns)` — Assignment or configuration line; sets or updates a value.
+- L085: `            entropy_loss = -entropy.mean()` — Assignment or configuration line; sets or updates a value.
+- L086: `(blank)` — Blank line for readability.
+- L087: `            loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss` — Assignment or configuration line; sets or updates a value.
+- L088: `            optimizer.zero_grad()` — Statement line; performs work as part of the current block.
+- L089: `            loss.backward()` — Statement line; performs work as part of the current block.
+- L090: `            optimizer.step()` — Statement line; performs work as part of the current block.
+- L091: `(blank)` — Blank line for readability.
+- L092: `(blank)` — Blank line for readability.
+- L093: `def _split_batch_sizes(total: int, workers: int) -> list[int]:` — Function definition for `_split_batch_sizes`.
+- L094: `    if workers <= 1:` — Conditional branch; runs the following block when the condition is true.
+- L095: `        return [total]` — Return statement; sends a value back to the caller.
+- L096: `    base = total // workers` — Assignment or configuration line; sets or updates a value.
+- L097: `    extra = total % workers` — Assignment or configuration line; sets or updates a value.
+- L098: `    sizes = [base + 1 if i < extra else base for i in range(workers)]` — Assignment or configuration line; sets or updates a value.
+- L099: `    return [size for size in sizes if size > 0]` — Return statement; sends a value back to the caller.
+- L100: `(blank)` — Blank line for readability.
+- L101: `(blank)` — Blank line for readability.
+- L102: `def collect_rollouts(` — Function definition for `collect_rollouts`.
+- L103: `    policy_state: dict,` — Statement line; performs work as part of the current block.
+- L104: `    env_config_dict: dict,` — Statement line; performs work as part of the current block.
+- L105: `    rollout_episodes: int,` — Statement line; performs work as part of the current block.
+- L106: `    seed: int,` — Statement line; performs work as part of the current block.
+- L107: `    hidden_dim: int,` — Statement line; performs work as part of the current block.
+- L108: `):` — Closes a previous block or literal.
+- L109: `    env_config = VectorEnvConfig(**env_config_dict)` — Assignment or configuration line; sets or updates a value.
+- L110: `    env_config.seed = seed` — Assignment or configuration line; sets or updates a value.
+- L111: `    policy = TwoHeadPolicy(` — Assignment or configuration line; sets or updates a value.
+- L112: `        PolicyConfig(obs_dim=52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len, hidden_dim=hidden_dim),` — Assignment or configuration line; sets or updates a value.
+- L113: `        device="cpu",` — Assignment or configuration line; sets or updates a value.
+- L114: `    )` — Closes a previous block or literal.
+- L115: `    policy.load_state_dict(policy_state)` — Statement line; performs work as part of the current block.
+- L116: `    env = VectorNLHEEnv(env_config)` — Assignment or configuration line; sets or updates a value.
+- L117: `(blank)` — Blank line for readability.
+- L118: `    obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L119: `    episode_steps = [[] for _ in range(env_config.batch_size)]` — Assignment or configuration line; sets or updates a value.
+- L120: `    step_player_ids = []` — Assignment or configuration line; sets or updates a value.
+- L121: `    returns = []` — Return statement; sends a value back to the caller.
+- L122: `    batch = TrajectoryBuffer()` — Assignment or configuration line; sets or updates a value.
+- L123: `    episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L124: `(blank)` — Blank line for readability.
+- L125: `    with torch.no_grad():` — Context manager; ensures setup/cleanup around a block.
+- L126: `        while np.any(episodes_done < rollout_episodes):` — Loop; repeats the block while the condition is true.
+- L127: `            active_envs = np.where(~env.episode_over)[0]` — Assignment or configuration line; sets or updates a value.
+- L128: `            if active_envs.size == 0:` — Conditional branch; runs the following block when the condition is true.
+- L129: `                for env_idx in range(env_config.batch_size):` — Loop; repeats the block for each item.
+- L130: `                    if episodes_done[env_idx] < rollout_episodes:` — Conditional branch; runs the following block when the condition is true.
+- L131: `                        env.reset_at(env_idx)` — Statement line; performs work as part of the current block.
+- L132: `                obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L133: `                continue` — Skips the rest of this loop iteration.
+- L134: `            obs_active = obs_np[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L135: `            mask_active = mask_np[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L136: `(blank)` — Blank line for readability.
+- L137: `            obs = torch.tensor(obs_active, dtype=torch.float32, device=policy.device)` — Assignment or configuration line; sets or updates a value.
+- L138: `            masks = torch.tensor(mask_active, dtype=torch.float32, device=policy.device)` — Assignment or configuration line; sets or updates a value.
+- L139: `            action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)` — Assignment or configuration line; sets or updates a value.
+- L140: `(blank)` — Blank line for readability.
+- L141: `            action_type_np = np.ones(env_config.batch_size, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L142: `            bet_frac_np = np.zeros(env_config.batch_size, dtype=np.float32)` — Assignment or configuration line; sets or updates a value.
+- L143: `            action_type_np[active_envs] = action_type.detach().cpu().numpy()` — Assignment or configuration line; sets or updates a value.
+- L144: `            bet_frac_np[active_envs] = bet_frac.detach().cpu().numpy()` — Assignment or configuration line; sets or updates a value.
+- L145: `(blank)` — Blank line for readability.
+- L146: `            for env_idx in active_envs:` — Loop; repeats the block for each item.
+- L147: `                step_player_ids.append(int(current_players[env_idx]))` — Statement line; performs work as part of the current block.
+- L148: `                returns.append(None)` — Return statement; sends a value back to the caller.
+- L149: `                episode_steps[env_idx].append(len(returns) - 1)` — Statement line; performs work as part of the current block.
+- L150: `(blank)` — Blank line for readability.
+- L151: `            batch.obs.extend(obs_active)` — Statement line; performs work as part of the current block.
+- L152: `            batch.masks.extend(mask_active)` — Statement line; performs work as part of the current block.
+- L153: `            batch.action_types.extend(action_type.detach().cpu().numpy().tolist())` — Statement line; performs work as part of the current block.
+- L154: `            batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())` — Statement line; performs work as part of the current block.
+- L155: `            batch.logprobs.extend(logprob.detach().cpu())` — Statement line; performs work as part of the current block.
+- L156: `            batch.values.extend(value.detach().cpu())` — Statement line; performs work as part of the current block.
+- L157: `            batch.entropies.extend(entropy.detach().cpu())` — Statement line; performs work as part of the current block.
+- L158: `            batch.raise_masks.extend(raise_mask.detach().cpu().tolist())` — Statement line; performs work as part of the current block.
+- L159: `            batch.returns.extend([0.0] * obs_active.shape[0])` — Statement line; performs work as part of the current block.
+- L160: `(blank)` — Blank line for readability.
+- L161: `            obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)` — Assignment or configuration line; sets or updates a value.
+- L162: `(blank)` — Blank line for readability.
+- L163: `            for env_idx in range(env_config.batch_size):` — Loop; repeats the block for each item.
+- L164: `                if env.episode_over[env_idx]:` — Conditional branch; runs the following block when the condition is true.
+- L165: `                    payoffs = env.get_payoffs()[env_idx]` — Assignment or configuration line; sets or updates a value.
+- L166: `                    for idx in episode_steps[env_idx]:` — Loop; repeats the block for each item.
+- L167: `                        player = step_player_ids[idx]` — Assignment or configuration line; sets or updates a value.
+- L168: `                        returns[idx] = float(payoffs[player])` — Return statement; sends a value back to the caller.
+- L169: `                    episode_steps[env_idx] = []` — Assignment or configuration line; sets or updates a value.
+- L170: `                    episodes_done[env_idx] += 1` — Assignment or configuration line; sets or updates a value.
+- L171: `                    if episodes_done[env_idx] < rollout_episodes:` — Conditional branch; runs the following block when the condition is true.
+- L172: `                        env.reset_at(env_idx)` — Statement line; performs work as part of the current block.
+- L173: `(blank)` — Blank line for readability.
+- L174: `    for i, ret in enumerate(returns):` — Loop; repeats the block for each item.
+- L175: `        batch.returns[i] = 0.0 if ret is None else ret` — Assignment or configuration line; sets or updates a value.
+- L176: `    return batch` — Return statement; sends a value back to the caller.
+- L177: `(blank)` — Blank line for readability.
+- L178: `(blank)` — Blank line for readability.
+- L179: `def merge_buffers(buffers: list[TrajectoryBuffer]) -> TrajectoryBuffer:` — Function definition for `merge_buffers`.
+- L180: `    merged = TrajectoryBuffer()` — Assignment or configuration line; sets or updates a value.
+- L181: `    for buf in buffers:` — Loop; repeats the block for each item.
+- L182: `        merged.obs.extend(buf.obs)` — Statement line; performs work as part of the current block.
+- L183: `        merged.masks.extend(buf.masks)` — Statement line; performs work as part of the current block.
+- L184: `        merged.action_types.extend(buf.action_types)` — Statement line; performs work as part of the current block.
+- L185: `        merged.bet_fracs.extend(buf.bet_fracs)` — Statement line; performs work as part of the current block.
+- L186: `        merged.logprobs.extend(buf.logprobs)` — Statement line; performs work as part of the current block.
+- L187: `        merged.values.extend(buf.values)` — Statement line; performs work as part of the current block.
+- L188: `        merged.entropies.extend(buf.entropies)` — Statement line; performs work as part of the current block.
+- L189: `        merged.raise_masks.extend(buf.raise_masks)` — Statement line; performs work as part of the current block.
+- L190: `        merged.returns.extend(buf.returns)` — Statement line; performs work as part of the current block.
+- L191: `    return merged` — Return statement; sends a value back to the caller.
+- L192: `(blank)` — Blank line for readability.
+- L193: `(blank)` — Blank line for readability.
+- L194: `def main():` — Function definition for `main`.
+- L195: `    parser = argparse.ArgumentParser(description="Vectorized PPO for production-grade NLHE env.")` — Assignment or configuration line; sets or updates a value.
+- L196: `    parser.add_argument("--batch-size", type=int, default=64)` — CLI flag definition for `--batch-size`.
+- L197: `    parser.add_argument("--num-players", type=int, default=6)` — CLI flag definition for `--num-players`.
+- L198: `    parser.add_argument("--stack", type=int, default=20000)` — CLI flag definition for `--stack`.
+- L199: `    parser.add_argument("--small-blind", type=int, default=50)` — CLI flag definition for `--small-blind`.
+- L200: `    parser.add_argument("--big-blind", type=int, default=100)` — CLI flag definition for `--big-blind`.
+- L201: `    parser.add_argument("--max-raises", type=int, default=0)` — CLI flag definition for `--max-raises`.
+- L202: `    parser.add_argument("--ante", type=int, default=0)` — CLI flag definition for `--ante`.
+- L203: `    parser.add_argument("--rake-pct", type=float, default=0.0)` — CLI flag definition for `--rake-pct`.
+- L204: `    parser.add_argument("--rake-cap", type=int, default=0)` — CLI flag definition for `--rake-cap`.
+- L205: `    parser.add_argument("--rake-cap-hand", type=int, default=0)` — CLI flag definition for `--rake-cap-hand`.
+- L206: `    parser.add_argument("--rake-cap-street", type=int, default=0)` — CLI flag definition for `--rake-cap-street`.
+- L207: `    parser.add_argument("--history-len", type=int, default=12)` — CLI flag definition for `--history-len`.
+- L208: `    parser.add_argument("--hands-per-episode", type=int, default=1)` — CLI flag definition for `--hands-per-episode`.
+- L209: `    parser.add_argument("--episodes", type=int, default=200000)` — CLI flag definition for `--episodes`.
+- L210: `    parser.add_argument("--rollout-episodes", type=int, default=4)` — CLI flag definition for `--rollout-episodes`.
+- L211: `    parser.add_argument("--hidden-dim", type=int, default=256)` — CLI flag definition for `--hidden-dim`.
+- L212: `    parser.add_argument("--lr", type=float, default=3e-4)` — CLI flag definition for `--lr`.
+- L213: `    parser.add_argument("--ppo-epochs", type=int, default=4)` — CLI flag definition for `--ppo-epochs`.
+- L214: `    parser.add_argument("--minibatch", type=int, default=2048)` — CLI flag definition for `--minibatch`.
+- L215: `    parser.add_argument("--clip-ratio", type=float, default=0.2)` — CLI flag definition for `--clip-ratio`.
+- L216: `    parser.add_argument("--entropy-coef", type=float, default=0.01)` — CLI flag definition for `--entropy-coef`.
+- L217: `    parser.add_argument("--value-coef", type=float, default=0.5)` — CLI flag definition for `--value-coef`.
+- L218: `    parser.add_argument("--seed", type=int, default=42)` — CLI flag definition for `--seed`.
+- L219: `    parser.add_argument("--device", default="cuda")` — CLI flag definition for `--device`.
+- L220: `    parser.add_argument("--rollout-workers", type=int, default=1)` — CLI flag definition for `--rollout-workers`.
+- L221: `    parser.add_argument("--log-every", type=int, default=10000)` — CLI flag definition for `--log-every`.
+- L222: `    parser.add_argument("--log-every-updates", type=int, default=0)` — CLI flag definition for `--log-every-updates`.
+- L223: `    parser.add_argument("--profile", action="store_true")` — CLI flag definition for `--profile`.
+- L224: `    parser.add_argument("--cpu-eval-workers", type=int, default=0)` — CLI flag definition for `--cpu-eval-workers`.
+- L225: `    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)` — CLI flag definition for `--cpu-eval-min-batch`.
+- L226: `    parser.add_argument("--save-every", type=int, default=50000)` — CLI flag definition for `--save-every`.
+- L227: `    parser.add_argument("--save-dir", default="experiments/prod_nlhe_ppo")` — CLI flag definition for `--save-dir`.
+- L228: `    parser.add_argument("--resume", default=None, help="Path to a checkpoint to resume from.")` — CLI flag definition for `--resume`.
+- L229: `    parser.add_argument("--eval-every", type=int, default=0)` — CLI flag definition for `--eval-every`.
+- L230: `    parser.add_argument("--eval-episodes", type=int, default=2000)` — CLI flag definition for `--eval-episodes`.
+- L231: `    parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="random")` — CLI flag definition for `--eval-opponent`.
+- L232: `    parser.add_argument("--lbr-rollouts", type=int, default=32)` — CLI flag definition for `--lbr-rollouts`.
+- L233: `    parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")` — CLI flag definition for `--lbr-bet-fracs`.
+- L234: `    args = parser.parse_args()` — Assignment or configuration line; sets or updates a value.
+- L235: `(blank)` — Blank line for readability.
+- L236: `    np.random.seed(args.seed)` — Statement line; performs work as part of the current block.
+- L237: `    torch.manual_seed(args.seed)` — Statement line; performs work as part of the current block.
+- L238: `(blank)` — Blank line for readability.
+- L239: `    env_config = VectorEnvConfig(` — Assignment or configuration line; sets or updates a value.
+- L240: `        batch_size=args.batch_size,` — Assignment or configuration line; sets or updates a value.
+- L241: `        num_players=args.num_players,` — Assignment or configuration line; sets or updates a value.
+- L242: `        stack=args.stack,` — Assignment or configuration line; sets or updates a value.
+- L243: `        small_blind=args.small_blind,` — Assignment or configuration line; sets or updates a value.
+- L244: `        big_blind=args.big_blind,` — Assignment or configuration line; sets or updates a value.
+- L245: `        max_raises_per_round=args.max_raises,` — Assignment or configuration line; sets or updates a value.
+- L246: `        ante=args.ante,` — Assignment or configuration line; sets or updates a value.
+- L247: `        rake_pct=args.rake_pct,` — Assignment or configuration line; sets or updates a value.
+- L248: `        rake_cap=args.rake_cap,` — Assignment or configuration line; sets or updates a value.
+- L249: `        rake_cap_per_hand=args.rake_cap_hand,` — Assignment or configuration line; sets or updates a value.
+- L250: `        rake_cap_per_street=args.rake_cap_street,` — Assignment or configuration line; sets or updates a value.
+- L251: `        history_len=args.history_len,` — Assignment or configuration line; sets or updates a value.
+- L252: `        hands_per_episode=args.hands_per_episode,` — Assignment or configuration line; sets or updates a value.
+- L253: `        seed=args.seed,` — Assignment or configuration line; sets or updates a value.
+- L254: `        cpu_eval_workers=args.cpu_eval_workers,` — Assignment or configuration line; sets or updates a value.
+- L255: `        cpu_eval_min_batch=args.cpu_eval_min_batch,` — Assignment or configuration line; sets or updates a value.
+- L256: `    )` — Closes a previous block or literal.
+- L257: `    env = VectorNLHEEnv(env_config)` — Assignment or configuration line; sets or updates a value.
+- L258: `    policy = TwoHeadPolicy(` — Assignment or configuration line; sets or updates a value.
+- L259: `        PolicyConfig(obs_dim=env.obs_dim, hidden_dim=args.hidden_dim),` — Assignment or configuration line; sets or updates a value.
+- L260: `        device=args.device,` — Assignment or configuration line; sets or updates a value.
+- L261: `    )` — Closes a previous block or literal.
+- L262: `    optimizer = optim.Adam(policy.parameters(), lr=args.lr)` — Assignment or configuration line; sets or updates a value.
+- L263: `(blank)` — Blank line for readability.
+- L264: `    total_episodes = 0` — Assignment or configuration line; sets or updates a value.
+- L265: `    update_idx = 0` — Assignment or configuration line; sets or updates a value.
+- L266: `    next_save = args.save_every if args.save_every else None` — Assignment or configuration line; sets or updates a value.
+- L267: `    if args.resume:` — Conditional branch; runs the following block when the condition is true.
+- L268: `        resume_path = pathlib.Path(args.resume)` — Assignment or configuration line; sets or updates a value.
+- L269: `        if not resume_path.exists():` — Conditional branch; runs the following block when the condition is true.
+- L270: `            raise SystemExit(f"resume_not_found={resume_path}")` — Raises an error to stop execution or signal failure.
+- L271: `        checkpoint = torch.load(resume_path, map_location=args.device)` — Assignment or configuration line; sets or updates a value.
+- L272: `        state_dict = checkpoint.get("model", checkpoint)` — Assignment or configuration line; sets or updates a value.
+- L273: `        policy.load_state_dict(state_dict)` — Statement line; performs work as part of the current block.
+- L274: `        total_episodes = int(checkpoint.get("episodes", 0))` — Assignment or configuration line; sets or updates a value.
+- L275: `        if "hidden_dim" in checkpoint:` — Conditional branch; runs the following block when the condition is true.
+- L276: `            args.hidden_dim = int(checkpoint["hidden_dim"])` — Assignment or configuration line; sets or updates a value.
+- L277: `        if "optimizer" in checkpoint:` — Conditional branch; runs the following block when the condition is true.
+- L278: `            try:` — Start of a try block for error handling.
+- L279: `                optimizer.load_state_dict(checkpoint["optimizer"])` — Statement line; performs work as part of the current block.
+- L280: `            except Exception:` — Error handling branch for exceptions.
+- L281: `                print("resume_note=optimizer_state_load_failed", flush=True)` — Prints a log message to the console.
+- L282: `        if args.save_every:` — Conditional branch; runs the following block when the condition is true.
+- L283: `            next_save = ((total_episodes // args.save_every) + 1) * args.save_every` — Assignment or configuration line; sets or updates a value.
+- L284: `        update_idx = int(total_episodes // max(1, args.batch_size * args.rollout_episodes))` — Assignment or configuration line; sets or updates a value.
+- L285: `        print(f"resume_from={resume_path} episodes={total_episodes}", flush=True)` — Prints a log message to the console.
+- L286: `    start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L287: `    print(` — Prints a log message to the console.
+- L288: `        "train_start "` — Statement line; performs work as part of the current block.
+- L289: `        f"batch={env_config.batch_size} players={env_config.num_players} "` — Assignment or configuration line; sets or updates a value.
+- L290: `        f"stack={env_config.stack} blinds={env_config.small_blind}/{env_config.big_blind} "` — Assignment or configuration line; sets or updates a value.
+- L291: `        f"max_raises={env_config.max_raises_per_round} "` — Assignment or configuration line; sets or updates a value.
+- L292: `        f"hands_per_ep={env_config.hands_per_episode} "` — Assignment or configuration line; sets or updates a value.
+- L293: `        f"device={args.device}",` — Assignment or configuration line; sets or updates a value.
+- L294: `        flush=True,` — Assignment or configuration line; sets or updates a value.
+- L295: `    )` — Closes a previous block or literal.
+- L296: `(blank)` — Blank line for readability.
+- L297: `    rollout_pool = None` — Assignment or configuration line; sets or updates a value.
+- L298: `    batch_sizes = _split_batch_sizes(args.batch_size, args.rollout_workers)` — Assignment or configuration line; sets or updates a value.
+- L299: `    if args.rollout_workers > 1:` — Conditional branch; runs the following block when the condition is true.
+- L300: `        ctx = mp.get_context("spawn")` — Assignment or configuration line; sets or updates a value.
+- L301: `        rollout_pool = ctx.Pool(processes=args.rollout_workers)` — Assignment or configuration line; sets or updates a value.
+- L302: `    else:` — Else branch; runs when previous conditions did not match.
+- L303: `        obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L304: `(blank)` — Blank line for readability.
+- L305: `    while total_episodes < args.episodes:` — Loop; repeats the block while the condition is true.
+- L306: `        rollout_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L307: `        if rollout_pool:` — Conditional branch; runs the following block when the condition is true.
+- L308: `            policy_state = {k: v.detach().cpu() for k, v in policy.state_dict().items()}` — Assignment or configuration line; sets or updates a value.
+- L309: `            payloads = []` — Assignment or configuration line; sets or updates a value.
+- L310: `            for i, batch_size in enumerate(batch_sizes):` — Loop; repeats the block for each item.
+- L311: `                worker_config = env_config.__dict__.copy()` — Assignment or configuration line; sets or updates a value.
+- L312: `                worker_config["batch_size"] = batch_size` — Assignment or configuration line; sets or updates a value.
+- L313: `                worker_config["seed"] = args.seed + update_idx * args.rollout_workers + i` — Assignment or configuration line; sets or updates a value.
+- L314: `                worker_config["cpu_eval_workers"] = 0` — Assignment or configuration line; sets or updates a value.
+- L315: `                payloads.append(` — Statement line; performs work as part of the current block.
+- L316: `                    (` — Closes a previous block or literal.
+- L317: `                        policy_state,` — Statement line; performs work as part of the current block.
+- L318: `                        worker_config,` — Statement line; performs work as part of the current block.
+- L319: `                        args.rollout_episodes,` — Statement line; performs work as part of the current block.
+- L320: `                        worker_config["seed"],` — Statement line; performs work as part of the current block.
+- L321: `                        args.hidden_dim,` — Statement line; performs work as part of the current block.
+- L322: `                    )` — Closes a previous block or literal.
+- L323: `                )` — Closes a previous block or literal.
+- L324: `            buffers = rollout_pool.starmap(collect_rollouts, payloads)` — Assignment or configuration line; sets or updates a value.
+- L325: `            batch = merge_buffers(buffers)` — Assignment or configuration line; sets or updates a value.
+- L326: `            if not batch.obs:` — Conditional branch; runs the following block when the condition is true.
+- L327: `                continue` — Skips the rest of this loop iteration.
+- L328: `            total_episodes += int(sum(batch_sizes) * args.rollout_episodes)` — Assignment or configuration line; sets or updates a value.
+- L329: `        else:` — Else branch; runs when previous conditions did not match.
+- L330: `            batch = TrajectoryBuffer()` — Assignment or configuration line; sets or updates a value.
+- L331: `            episode_steps = [[] for _ in range(env_config.batch_size)]` — Assignment or configuration line; sets or updates a value.
+- L332: `            step_player_ids = []` — Assignment or configuration line; sets or updates a value.
+- L333: `            returns = []` — Return statement; sends a value back to the caller.
+- L334: `            episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L335: `(blank)` — Blank line for readability.
+- L336: `            while np.any(episodes_done < args.rollout_episodes):` — Loop; repeats the block while the condition is true.
+- L337: `                active_envs = np.where(~env.episode_over)[0]` — Assignment or configuration line; sets or updates a value.
+- L338: `                if active_envs.size == 0:` — Conditional branch; runs the following block when the condition is true.
+- L339: `                    for env_idx in range(env_config.batch_size):` — Loop; repeats the block for each item.
+- L340: `                        if episodes_done[env_idx] < args.rollout_episodes:` — Conditional branch; runs the following block when the condition is true.
+- L341: `                            env.reset_at(env_idx)` — Statement line; performs work as part of the current block.
+- L342: `                    obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L343: `                    continue` — Skips the rest of this loop iteration.
+- L344: `                obs_active = obs_np[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L345: `                mask_active = mask_np[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L346: `(blank)` — Blank line for readability.
+- L347: `                obs = torch.tensor(obs_active, dtype=torch.float32, device=policy.device)` — Assignment or configuration line; sets or updates a value.
+- L348: `                masks = torch.tensor(mask_active, dtype=torch.float32, device=policy.device)` — Assignment or configuration line; sets or updates a value.
+- L349: `                action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)` — Assignment or configuration line; sets or updates a value.
+- L350: `(blank)` — Blank line for readability.
+- L351: `                action_type_np = np.ones(env_config.batch_size, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L352: `                bet_frac_np = np.zeros(env_config.batch_size, dtype=np.float32)` — Assignment or configuration line; sets or updates a value.
+- L353: `                action_type_np[active_envs] = action_type.detach().cpu().numpy()` — Assignment or configuration line; sets or updates a value.
+- L354: `                bet_frac_np[active_envs] = bet_frac.detach().cpu().numpy()` — Assignment or configuration line; sets or updates a value.
+- L355: `(blank)` — Blank line for readability.
+- L356: `                for env_idx in active_envs:` — Loop; repeats the block for each item.
+- L357: `                    step_player_ids.append(int(current_players[env_idx]))` — Statement line; performs work as part of the current block.
+- L358: `                    returns.append(None)` — Return statement; sends a value back to the caller.
+- L359: `                    episode_steps[env_idx].append(len(returns) - 1)` — Statement line; performs work as part of the current block.
+- L360: `(blank)` — Blank line for readability.
+- L361: `                batch.obs.extend(obs_active)` — Statement line; performs work as part of the current block.
+- L362: `                batch.masks.extend(mask_active)` — Statement line; performs work as part of the current block.
+- L363: `                batch.action_types.extend(action_type.detach().cpu().numpy().tolist())` — Statement line; performs work as part of the current block.
+- L364: `                batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())` — Statement line; performs work as part of the current block.
+- L365: `                batch.logprobs.extend(logprob.detach().cpu())` — Statement line; performs work as part of the current block.
+- L366: `                batch.values.extend(value.detach().cpu())` — Statement line; performs work as part of the current block.
+- L367: `                batch.entropies.extend(entropy.detach().cpu())` — Statement line; performs work as part of the current block.
+- L368: `                batch.raise_masks.extend(raise_mask.detach().cpu().tolist())` — Statement line; performs work as part of the current block.
+- L369: `                batch.returns.extend([0.0] * obs_active.shape[0])` — Statement line; performs work as part of the current block.
+- L370: `(blank)` — Blank line for readability.
+- L371: `                obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)` — Assignment or configuration line; sets or updates a value.
+- L372: `(blank)` — Blank line for readability.
+- L373: `                for env_idx in range(env_config.batch_size):` — Loop; repeats the block for each item.
+- L374: `                    if env.episode_over[env_idx]:` — Conditional branch; runs the following block when the condition is true.
+- L375: `                        payoffs = env.get_payoffs()[env_idx]` — Assignment or configuration line; sets or updates a value.
+- L376: `                        for idx in episode_steps[env_idx]:` — Loop; repeats the block for each item.
+- L377: `                            player = step_player_ids[idx]` — Assignment or configuration line; sets or updates a value.
+- L378: `                            returns[idx] = float(payoffs[player])` — Return statement; sends a value back to the caller.
+- L379: `                        episode_steps[env_idx] = []` — Assignment or configuration line; sets or updates a value.
+- L380: `                        episodes_done[env_idx] += 1` — Assignment or configuration line; sets or updates a value.
+- L381: `                        if episodes_done[env_idx] < args.rollout_episodes:` — Conditional branch; runs the following block when the condition is true.
+- L382: `                            env.reset_at(env_idx)` — Statement line; performs work as part of the current block.
+- L383: `(blank)` — Blank line for readability.
+- L384: `            for i, ret in enumerate(returns):` — Loop; repeats the block for each item.
+- L385: `                batch.returns[i] = 0.0 if ret is None else ret` — Assignment or configuration line; sets or updates a value.
+- L386: `(blank)` — Blank line for readability.
+- L387: `            if not batch.obs:` — Conditional branch; runs the following block when the condition is true.
+- L388: `                obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L389: `                continue` — Skips the rest of this loop iteration.
+- L390: `(blank)` — Blank line for readability.
+- L391: `            total_episodes += int(env_config.batch_size * args.rollout_episodes)` — Assignment or configuration line; sets or updates a value.
+- L392: `(blank)` — Blank line for readability.
+- L393: `        batch_tensors = batch.as_tensors(policy.device)` — Assignment or configuration line; sets or updates a value.
+- L394: `        update_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L395: `        ppo_update(` — Statement line; performs work as part of the current block.
+- L396: `            policy,` — Statement line; performs work as part of the current block.
+- L397: `            optimizer,` — Statement line; performs work as part of the current block.
+- L398: `            batch_tensors,` — Statement line; performs work as part of the current block.
+- L399: `            clip_ratio=args.clip_ratio,` — Assignment or configuration line; sets or updates a value.
+- L400: `            value_coef=args.value_coef,` — Assignment or configuration line; sets or updates a value.
+- L401: `            entropy_coef=args.entropy_coef,` — Assignment or configuration line; sets or updates a value.
+- L402: `            epochs=args.ppo_epochs,` — Assignment or configuration line; sets or updates a value.
+- L403: `            minibatch=args.minibatch,` — Assignment or configuration line; sets or updates a value.
+- L404: `        )` — Closes a previous block or literal.
+- L405: `        update_idx += 1` — Assignment or configuration line; sets or updates a value.
+- L406: `        rollout_elapsed = update_start - rollout_start` — Assignment or configuration line; sets or updates a value.
+- L407: `        update_elapsed = time.time() - update_start` — Assignment or configuration line; sets or updates a value.
+- L408: `(blank)` — Blank line for readability.
+- L409: `        if args.log_every and total_episodes % args.log_every == 0:` — Conditional branch; runs the following block when the condition is true.
+- L410: `            elapsed = time.time() - start` — Assignment or configuration line; sets or updates a value.
+- L411: `            msg = (` — Assignment or configuration line; sets or updates a value.
+- L412: `                f"episodes={total_episodes} updates={update_idx} elapsed={elapsed:.1f}s "` — Assignment or configuration line; sets or updates a value.
+- L413: `                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"` — Assignment or configuration line; sets or updates a value.
+- L414: `            )` — Closes a previous block or literal.
+- L415: `            if args.profile:` — Conditional branch; runs the following block when the condition is true.
+- L416: `                samples = len(batch.obs)` — Assignment or configuration line; sets or updates a value.
+- L417: `                total_sec = max(1e-6, rollout_elapsed + update_elapsed)` — Assignment or configuration line; sets or updates a value.
+- L418: `                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"` — Assignment or configuration line; sets or updates a value.
+- L419: `            print(msg, flush=True)` — Prints a log message to the console.
+- L420: `        if args.log_every_updates and update_idx % args.log_every_updates == 0:` — Conditional branch; runs the following block when the condition is true.
+- L421: `            elapsed = time.time() - start` — Assignment or configuration line; sets or updates a value.
+- L422: `            msg = (` — Assignment or configuration line; sets or updates a value.
+- L423: `                f"update={update_idx} episodes={total_episodes} elapsed={elapsed:.1f}s "` — Assignment or configuration line; sets or updates a value.
+- L424: `                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"` — Assignment or configuration line; sets or updates a value.
+- L425: `            )` — Closes a previous block or literal.
+- L426: `            if args.profile:` — Conditional branch; runs the following block when the condition is true.
+- L427: `                samples = len(batch.obs)` — Assignment or configuration line; sets or updates a value.
+- L428: `                total_sec = max(1e-6, rollout_elapsed + update_elapsed)` — Assignment or configuration line; sets or updates a value.
+- L429: `                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"` — Assignment or configuration line; sets or updates a value.
+- L430: `            print(msg, flush=True)` — Prints a log message to the console.
+- L431: `(blank)` — Blank line for readability.
+- L432: `        if next_save is not None:` — Conditional branch; runs the following block when the condition is true.
+- L433: `            while total_episodes >= next_save:` — Loop; repeats the block while the condition is true.
+- L434: `                save_dir = pathlib.Path(args.save_dir)` — Assignment or configuration line; sets or updates a value.
+- L435: `                save_dir.mkdir(parents=True, exist_ok=True)` — Assignment or configuration line; sets or updates a value.
+- L436: `                path = save_dir / f"policy_ep_{next_save:06d}.pt"` — Assignment or configuration line; sets or updates a value.
+- L437: `                torch.save(` — Statement line; performs work as part of the current block.
+- L438: `                    {` — Closes a previous block or literal.
+- L439: `                        "model": policy.state_dict(),` — Statement line; performs work as part of the current block.
+- L440: `                        "episodes": next_save,` — Statement line; performs work as part of the current block.
+- L441: `                        "obs_dim": env.obs_dim,` — Statement line; performs work as part of the current block.
+- L442: `                        "config": env_config.__dict__,` — Statement line; performs work as part of the current block.
+- L443: `                        "hidden_dim": args.hidden_dim,` — Statement line; performs work as part of the current block.
+- L444: `                        "optimizer": optimizer.state_dict(),` — Statement line; performs work as part of the current block.
+- L445: `                    },` — Closes a previous block or literal.
+- L446: `                    path,` — Statement line; performs work as part of the current block.
+- L447: `                )` — Closes a previous block or literal.
+- L448: `                print(f"checkpoint_saved={path}")` — Prints a log message to the console.
+- L449: `                next_save += args.save_every` — Assignment or configuration line; sets or updates a value.
+- L450: `(blank)` — Blank line for readability.
+- L451: `        if args.eval_every and total_episodes % args.eval_every == 0:` — Conditional branch; runs the following block when the condition is true.
+- L452: `            bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]` — Assignment or configuration line; sets or updates a value.
+- L453: `            score = evaler.evaluate(` — Assignment or configuration line; sets or updates a value.
+- L454: `                policy.state_dict(),` — Statement line; performs work as part of the current block.
+- L455: `                env_config,` — Statement line; performs work as part of the current block.
+- L456: `                args.eval_episodes,` — Statement line; performs work as part of the current block.
+- L457: `                opponent=args.eval_opponent,` — Assignment or configuration line; sets or updates a value.
+- L458: `                lbr_rollouts=args.lbr_rollouts,` — Assignment or configuration line; sets or updates a value.
+- L459: `                lbr_bet_fracs=bet_fracs,` — Assignment or configuration line; sets or updates a value.
+- L460: `            )` — Closes a previous block or literal.
+- L461: `            print(f"eval@{total_episodes} opponent={args.eval_opponent} avg_return={score:.4f}", flush=True)` — Prints a log message to the console.
+- L462: `(blank)` — Blank line for readability.
+- L463: `    if rollout_pool:` — Conditional branch; runs the following block when the condition is true.
+- L464: `        rollout_pool.close()` — Statement line; performs work as part of the current block.
+- L465: `        rollout_pool.join()` — Statement line; performs work as part of the current block.
+- L466: `(blank)` — Blank line for readability.
+- L467: `(blank)` — Blank line for readability.
+- L468: `if __name__ == "__main__":` — Conditional branch; runs the following block when the condition is true.
+- L469: `    main()` — Statement line; performs work as part of the current block.
+
+## `custom_poker_lab/prod_lab/train_league.py`
+
+Source: `/home/marcel/Work/Poker/custom_poker_lab/prod_lab/train_league.py`
+
+Line-by-line notes:
+
+- L001: `from __future__ import annotations` — Enables postponed evaluation of type hints.
+- L002: `(blank)` — Blank line for readability.
+- L003: `import argparse` — Import statement; brings in modules needed later.
+- L004: `import multiprocessing as mp` — Import statement; brings in modules needed later.
+- L005: `import pathlib` — Import statement; brings in modules needed later.
+- L006: `import sys` — Import statement; brings in modules needed later.
+- L007: `import time` — Import statement; brings in modules needed later.
+- L008: `(blank)` — Blank line for readability.
+- L009: `import numpy as np` — Import statement; brings in modules needed later.
+- L010: `import torch` — Import statement; brings in modules needed later.
+- L011: `from torch import nn, optim` — Import statement; brings in modules needed later.
+- L012: `(blank)` — Blank line for readability.
+- L013: `ROOT = pathlib.Path(__file__).resolve().parents[2]` — Assignment or configuration line; sets or updates a value.
+- L014: `if str(ROOT) not in sys.path:` — Conditional branch; runs the following block when the condition is true.
+- L015: `    sys.path.insert(0, str(ROOT))` — Statement line; performs work as part of the current block.
+- L016: `(blank)` — Blank line for readability.
+- L017: `from custom_poker_lab.poker_policy import PolicyConfig, TwoHeadPolicy, TrajectoryBuffer` — Import statement; brings in modules needed later.
+- L018: `from custom_poker_lab.prod_lab.vector_env import VectorEnvConfig, VectorNLHEEnv` — Import statement; brings in modules needed later.
+- L019: `from custom_poker_lab.prod_lab import eval as evaler` — Import statement; brings in modules needed later.
+- L020: `(blank)` — Blank line for readability.
+- L021: `(blank)` — Blank line for readability.
+- L022: `class RandomPolicy:` — Class definition for `RandomPolicy`.
+- L023: `    def __init__(self, rng):` — Function definition for `__init__`.
+- L024: `        self.rng = rng` — Assignment or configuration line; sets or updates a value.
+- L025: `(blank)` — Blank line for readability.
+- L026: `    def act(self, obs, mask):` — Function definition for `act`.
+- L027: `        actions = [i for i, v in enumerate(mask) if v > 0]` — Assignment or configuration line; sets or updates a value.
+- L028: `        if not actions:` — Conditional branch; runs the following block when the condition is true.
+- L029: `            return 1, 0.0` — Return statement; sends a value back to the caller.
+- L030: `        return int(self.rng.choice(actions)), float(self.rng.random())` — Return statement; sends a value back to the caller.
+- L031: `(blank)` — Blank line for readability.
+- L032: `(blank)` — Blank line for readability.
+- L033: `def env_obs_dim(env_config: VectorEnvConfig) -> int:` — Function definition for `env_obs_dim`.
+- L034: `    return 52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len` — Return statement; sends a value back to the caller.
+- L035: `(blank)` — Blank line for readability.
+- L036: `(blank)` — Blank line for readability.
+- L037: `def sample_actions(policy: TwoHeadPolicy, obs: torch.Tensor, mask: torch.Tensor):` — Function definition for `sample_actions`.
+- L038: `    type_logits, size_params, value = policy.net(obs)` — Assignment or configuration line; sets or updates a value.
+- L039: `    type_logits = type_logits.masked_fill(mask == 0, -1e9)` — Statement line; performs work as part of the current block.
+- L040: `    type_dist = torch.distributions.Categorical(logits=type_logits)` — Assignment or configuration line; sets or updates a value.
+- L041: `    action_type = type_dist.sample()` — Assignment or configuration line; sets or updates a value.
+- L042: `    logprob_type = type_dist.log_prob(action_type)` — Assignment or configuration line; sets or updates a value.
+- L043: `    entropy_type = type_dist.entropy()` — Assignment or configuration line; sets or updates a value.
+- L044: `(blank)` — Blank line for readability.
+- L045: `    alpha = torch.nn.functional.softplus(size_params[:, 0]) + 1.0` — Assignment or configuration line; sets or updates a value.
+- L046: `    beta = torch.nn.functional.softplus(size_params[:, 1]) + 1.0` — Assignment or configuration line; sets or updates a value.
+- L047: `    size_dist = torch.distributions.Beta(alpha, beta)` — Assignment or configuration line; sets or updates a value.
+- L048: `    bet_frac = size_dist.sample().clamp(0.0, 1.0)` — Assignment or configuration line; sets or updates a value.
+- L049: `    logprob_size = size_dist.log_prob(bet_frac)` — Assignment or configuration line; sets or updates a value.
+- L050: `    entropy_size = size_dist.entropy()` — Assignment or configuration line; sets or updates a value.
+- L051: `(blank)` — Blank line for readability.
+- L052: `    raise_mask = (action_type == 2).float()` — Statement line; performs work as part of the current block.
+- L053: `    logprob = logprob_type + raise_mask * logprob_size` — Assignment or configuration line; sets or updates a value.
+- L054: `    entropy = entropy_type + raise_mask * entropy_size` — Assignment or configuration line; sets or updates a value.
+- L055: `(blank)` — Blank line for readability.
+- L056: `    return action_type, bet_frac, logprob, value, entropy, raise_mask` — Return statement; sends a value back to the caller.
+- L057: `(blank)` — Blank line for readability.
+- L058: `(blank)` — Blank line for readability.
+- L059: `def ppo_update(policy, optimizer, batch, clip_ratio, value_coef, entropy_coef, epochs, minibatch):` — Function definition for `ppo_update`.
+- L060: `    (` — Closes a previous block or literal.
+- L061: `        obs,` — Statement line; performs work as part of the current block.
+- L062: `        masks,` — Statement line; performs work as part of the current block.
+- L063: `        action_types,` — Statement line; performs work as part of the current block.
+- L064: `        bet_fracs,` — Statement line; performs work as part of the current block.
+- L065: `        old_logprobs,` — Statement line; performs work as part of the current block.
+- L066: `        values,` — Statement line; performs work as part of the current block.
+- L067: `        entropies,` — Statement line; performs work as part of the current block.
+- L068: `        raise_masks,` — Statement line; performs work as part of the current block.
+- L069: `        returns,` — Return statement; sends a value back to the caller.
+- L070: `    ) = batch` — Closes a previous block or literal.
+- L071: `    advantages = returns - values` — Assignment or configuration line; sets or updates a value.
+- L072: `    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)` — Assignment or configuration line; sets or updates a value.
+- L073: `(blank)` — Blank line for readability.
+- L074: `    n = obs.shape[0]` — Assignment or configuration line; sets or updates a value.
+- L075: `    idx = torch.randperm(n, device=obs.device)` — Assignment or configuration line; sets or updates a value.
+- L076: `    for _ in range(epochs):` — Loop; repeats the block for each item.
+- L077: `        for start in range(0, n, minibatch):` — Loop; repeats the block for each item.
+- L078: `            end = start + minibatch` — Assignment or configuration line; sets or updates a value.
+- L079: `            mb_idx = idx[start:end]` — Assignment or configuration line; sets or updates a value.
+- L080: `            mb_obs = obs[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L081: `            mb_masks = masks[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L082: `            mb_actions = action_types[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L083: `            mb_bet_fracs = bet_fracs[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L084: `            mb_old_logprobs = old_logprobs[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L085: `            mb_returns = returns[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L086: `            mb_adv = advantages[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L087: `            mb_raise_masks = raise_masks[mb_idx]` — Assignment or configuration line; sets or updates a value.
+- L088: `(blank)` — Blank line for readability.
+- L089: `            logprob, entropy, value = policy.evaluate_actions(` — Assignment or configuration line; sets or updates a value.
+- L090: `                mb_obs,` — Statement line; performs work as part of the current block.
+- L091: `                mb_masks,` — Statement line; performs work as part of the current block.
+- L092: `                mb_actions,` — Statement line; performs work as part of the current block.
+- L093: `                mb_bet_fracs,` — Statement line; performs work as part of the current block.
+- L094: `                mb_raise_masks,` — Statement line; performs work as part of the current block.
+- L095: `            )` — Closes a previous block or literal.
+- L096: `            ratio = torch.exp(logprob - mb_old_logprobs)` — Assignment or configuration line; sets or updates a value.
+- L097: `            clipped = torch.clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio)` — Assignment or configuration line; sets or updates a value.
+- L098: `            policy_loss = -(torch.min(ratio * mb_adv, clipped * mb_adv)).mean()` — Assignment or configuration line; sets or updates a value.
+- L099: `            value_loss = nn.functional.mse_loss(value, mb_returns)` — Assignment or configuration line; sets or updates a value.
+- L100: `            entropy_loss = -entropy.mean()` — Assignment or configuration line; sets or updates a value.
+- L101: `(blank)` — Blank line for readability.
+- L102: `            loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss` — Assignment or configuration line; sets or updates a value.
+- L103: `            optimizer.zero_grad()` — Statement line; performs work as part of the current block.
+- L104: `            loss.backward()` — Statement line; performs work as part of the current block.
+- L105: `            optimizer.step()` — Statement line; performs work as part of the current block.
+- L106: `(blank)` — Blank line for readability.
+- L107: `(blank)` — Blank line for readability.
+- L108: `def _split_batch_sizes(total: int, workers: int) -> list[int]:` — Function definition for `_split_batch_sizes`.
+- L109: `    if workers <= 1:` — Conditional branch; runs the following block when the condition is true.
+- L110: `        return [total]` — Return statement; sends a value back to the caller.
+- L111: `    base = total // workers` — Assignment or configuration line; sets or updates a value.
+- L112: `    extra = total % workers` — Assignment or configuration line; sets or updates a value.
+- L113: `    sizes = [base + 1 if i < extra else base for i in range(workers)]` — Assignment or configuration line; sets or updates a value.
+- L114: `    return [size for size in sizes if size > 0]` — Return statement; sends a value back to the caller.
+- L115: `(blank)` — Blank line for readability.
+- L116: `(blank)` — Blank line for readability.
+- L117: `def collect_rollouts_league(` — Function definition for `collect_rollouts_league`.
+- L118: `    policy_state: dict,` — Statement line; performs work as part of the current block.
+- L119: `    env_config_dict: dict,` — Statement line; performs work as part of the current block.
+- L120: `    rollout_episodes: int,` — Statement line; performs work as part of the current block.
+- L121: `    seed: int,` — Statement line; performs work as part of the current block.
+- L122: `    hidden_dim: int,` — Statement line; performs work as part of the current block.
+- L123: `    pool_states: list[dict],` — Statement line; performs work as part of the current block.
+- L124: `    opponent_prob: float,` — Statement line; performs work as part of the current block.
+- L125: `):` — Closes a previous block or literal.
+- L126: `    env_config = VectorEnvConfig(**env_config_dict)` — Assignment or configuration line; sets or updates a value.
+- L127: `    env_config.seed = seed` — Assignment or configuration line; sets or updates a value.
+- L128: `    policy = TwoHeadPolicy(` — Assignment or configuration line; sets or updates a value.
+- L129: `        PolicyConfig(obs_dim=52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len, hidden_dim=hidden_dim),` — Assignment or configuration line; sets or updates a value.
+- L130: `        device="cpu",` — Assignment or configuration line; sets or updates a value.
+- L131: `    )` — Closes a previous block or literal.
+- L132: `    policy.load_state_dict(policy_state)` — Statement line; performs work as part of the current block.
+- L133: `(blank)` — Blank line for readability.
+- L134: `    opponent_policies = []` — Assignment or configuration line; sets or updates a value.
+- L135: `    for state in pool_states:` — Loop; repeats the block for each item.
+- L136: `        opp = TwoHeadPolicy(` — Assignment or configuration line; sets or updates a value.
+- L137: `            PolicyConfig(obs_dim=52 + 5 + 7 * env_config.num_players + 4 * env_config.history_len, hidden_dim=hidden_dim),` — Assignment or configuration line; sets or updates a value.
+- L138: `            device="cpu",` — Assignment or configuration line; sets or updates a value.
+- L139: `        )` — Closes a previous block or literal.
+- L140: `        opp.load_state_dict(state)` — Statement line; performs work as part of the current block.
+- L141: `        opponent_policies.append(opp)` — Statement line; performs work as part of the current block.
+- L142: `(blank)` — Blank line for readability.
+- L143: `    rng = np.random.default_rng(seed)` — Assignment or configuration line; sets or updates a value.
+- L144: `    env = VectorNLHEEnv(env_config)` — Assignment or configuration line; sets or updates a value.
+- L145: `    return rollout_episode_steps(env, policy, opponent_policies, opponent_prob, rng, rollout_episodes)` — Return statement; sends a value back to the caller.
+- L146: `(blank)` — Blank line for readability.
+- L147: `(blank)` — Blank line for readability.
+- L148: `def merge_buffers(buffers: list[TrajectoryBuffer]) -> TrajectoryBuffer:` — Function definition for `merge_buffers`.
+- L149: `    merged = TrajectoryBuffer()` — Assignment or configuration line; sets or updates a value.
+- L150: `    for buf in buffers:` — Loop; repeats the block for each item.
+- L151: `        merged.obs.extend(buf.obs)` — Statement line; performs work as part of the current block.
+- L152: `        merged.masks.extend(buf.masks)` — Statement line; performs work as part of the current block.
+- L153: `        merged.action_types.extend(buf.action_types)` — Statement line; performs work as part of the current block.
+- L154: `        merged.bet_fracs.extend(buf.bet_fracs)` — Statement line; performs work as part of the current block.
+- L155: `        merged.logprobs.extend(buf.logprobs)` — Statement line; performs work as part of the current block.
+- L156: `        merged.values.extend(buf.values)` — Statement line; performs work as part of the current block.
+- L157: `        merged.entropies.extend(buf.entropies)` — Statement line; performs work as part of the current block.
+- L158: `        merged.raise_masks.extend(buf.raise_masks)` — Statement line; performs work as part of the current block.
+- L159: `        merged.returns.extend(buf.returns)` — Statement line; performs work as part of the current block.
+- L160: `    return merged` — Return statement; sends a value back to the caller.
+- L161: `(blank)` — Blank line for readability.
+- L162: `(blank)` — Blank line for readability.
+- L163: `def rollout_episode_steps(` — Function definition for `rollout_episode_steps`.
+- L164: `    env: VectorNLHEEnv,` — Statement line; performs work as part of the current block.
+- L165: `    policy: TwoHeadPolicy,` — Statement line; performs work as part of the current block.
+- L166: `    opponent_policies: list[TwoHeadPolicy],` — Statement line; performs work as part of the current block.
+- L167: `    opponent_prob: float,` — Statement line; performs work as part of the current block.
+- L168: `    rng: np.random.Generator,` — Statement line; performs work as part of the current block.
+- L169: `    episodes_per_env: int,` — Statement line; performs work as part of the current block.
+- L170: `):` — Closes a previous block or literal.
+- L171: `    obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L172: `    episode_steps = [[] for _ in range(env.config.batch_size)]` — Assignment or configuration line; sets or updates a value.
+- L173: `    step_player_ids = []` — Assignment or configuration line; sets or updates a value.
+- L174: `    returns = []` — Return statement; sends a value back to the caller.
+- L175: `    batch = TrajectoryBuffer()` — Assignment or configuration line; sets or updates a value.
+- L176: `(blank)` — Blank line for readability.
+- L177: `    episodes_done = np.zeros(env.config.batch_size, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L178: `    while np.any(episodes_done < episodes_per_env):` — Loop; repeats the block while the condition is true.
+- L179: `        active_envs = np.where(~env.episode_over)[0]` — Assignment or configuration line; sets or updates a value.
+- L180: `        if active_envs.size == 0:` — Conditional branch; runs the following block when the condition is true.
+- L181: `            for env_idx in range(env.config.batch_size):` — Loop; repeats the block for each item.
+- L182: `                if episodes_done[env_idx] < episodes_per_env:` — Conditional branch; runs the following block when the condition is true.
+- L183: `                    env.reset_at(env_idx)` — Statement line; performs work as part of the current block.
+- L184: `            obs_np, mask_np, current_players = env.get_obs()` — Assignment or configuration line; sets or updates a value.
+- L185: `            continue` — Skips the rest of this loop iteration.
+- L186: `        obs_active = obs_np[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L187: `        mask_active = mask_np[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L188: `        players_active = current_players[active_envs]` — Assignment or configuration line; sets or updates a value.
+- L189: `(blank)` — Blank line for readability.
+- L190: `        action_type_np = np.ones(env.config.batch_size, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L191: `        bet_frac_np = np.zeros(env.config.batch_size, dtype=np.float32)` — Assignment or configuration line; sets or updates a value.
+- L192: `(blank)` — Blank line for readability.
+- L193: `        learner_envs = [i for i, pid in zip(active_envs, players_active) if pid == 0]` — Statement line; performs work as part of the current block.
+- L194: `        if learner_envs:` — Conditional branch; runs the following block when the condition is true.
+- L195: `            idx = np.array(learner_envs, dtype=np.int64)` — Assignment or configuration line; sets or updates a value.
+- L196: `            obs = torch.tensor(obs_np[idx], dtype=torch.float32, device=policy.device)` — Assignment or configuration line; sets or updates a value.
+- L197: `            masks = torch.tensor(mask_np[idx], dtype=torch.float32, device=policy.device)` — Assignment or configuration line; sets or updates a value.
+- L198: `            action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)` — Assignment or configuration line; sets or updates a value.
+- L199: `(blank)` — Blank line for readability.
+- L200: `            action_type_np[idx] = action_type.detach().cpu().numpy()` — Assignment or configuration line; sets or updates a value.
+- L201: `            bet_frac_np[idx] = bet_frac.detach().cpu().numpy()` — Assignment or configuration line; sets or updates a value.
+- L202: `(blank)` — Blank line for readability.
+- L203: `            for env_idx in idx:` — Loop; repeats the block for each item.
+- L204: `                step_player_ids.append(0)` — Statement line; performs work as part of the current block.
+- L205: `                returns.append(None)` — Return statement; sends a value back to the caller.
+- L206: `                episode_steps[env_idx].append(len(returns) - 1)` — Statement line; performs work as part of the current block.
+- L207: `(blank)` — Blank line for readability.
+- L208: `            batch.obs.extend(obs_np[idx])` — Statement line; performs work as part of the current block.
+- L209: `            batch.masks.extend(mask_np[idx])` — Statement line; performs work as part of the current block.
+- L210: `            batch.action_types.extend(action_type.detach().cpu().numpy().tolist())` — Statement line; performs work as part of the current block.
+- L211: `            batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())` — Statement line; performs work as part of the current block.
+- L212: `            batch.logprobs.extend(logprob.detach().cpu())` — Statement line; performs work as part of the current block.
+- L213: `            batch.values.extend(value.detach().cpu())` — Statement line; performs work as part of the current block.
+- L214: `            batch.entropies.extend(entropy.detach().cpu())` — Statement line; performs work as part of the current block.
+- L215: `            batch.raise_masks.extend(raise_mask.detach().cpu().tolist())` — Statement line; performs work as part of the current block.
+- L216: `            batch.returns.extend([0.0] * len(idx))` — Statement line; performs work as part of the current block.
+- L217: `(blank)` — Blank line for readability.
+- L218: `        opponent_envs = [i for i, pid in zip(active_envs, players_active) if pid != 0]` — Assignment or configuration line; sets or updates a value.
+- L219: `        for env_idx in opponent_envs:` — Loop; repeats the block for each item.
+- L220: `            obs = obs_np[env_idx]` — Assignment or configuration line; sets or updates a value.
+- L221: `            mask = mask_np[env_idx]` — Assignment or configuration line; sets or updates a value.
+- L222: `            use_pool = opponent_policies and rng.random() < opponent_prob` — Assignment or configuration line; sets or updates a value.
+- L223: `            if use_pool:` — Conditional branch; runs the following block when the condition is true.
+- L224: `                opp = opponent_policies[int(rng.integers(0, len(opponent_policies)))]` — Assignment or configuration line; sets or updates a value.
+- L225: `                a_type, b_frac, *_ = opp.act({"obs": obs, "legal_action_mask": mask}, deterministic=True)` — Assignment or configuration line; sets or updates a value.
+- L226: `                action_type_np[env_idx] = a_type` — Assignment or configuration line; sets or updates a value.
+- L227: `                bet_frac_np[env_idx] = b_frac` — Assignment or configuration line; sets or updates a value.
+- L228: `            else:` — Else branch; runs when previous conditions did not match.
+- L229: `                a_type, b_frac = RandomPolicy(rng).act(obs, mask)` — Assignment or configuration line; sets or updates a value.
+- L230: `                action_type_np[env_idx] = a_type` — Assignment or configuration line; sets or updates a value.
+- L231: `                bet_frac_np[env_idx] = b_frac` — Assignment or configuration line; sets or updates a value.
+- L232: `(blank)` — Blank line for readability.
+- L233: `        obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)` — Assignment or configuration line; sets or updates a value.
+- L234: `(blank)` — Blank line for readability.
+- L235: `        for env_idx in range(env.config.batch_size):` — Loop; repeats the block for each item.
+- L236: `            if env.episode_over[env_idx]:` — Conditional branch; runs the following block when the condition is true.
+- L237: `                payoffs = env.get_payoffs()[env_idx]` — Assignment or configuration line; sets or updates a value.
+- L238: `                for idx in episode_steps[env_idx]:` — Loop; repeats the block for each item.
+- L239: `                    returns[idx] = float(payoffs[0])` — Return statement; sends a value back to the caller.
+- L240: `                episode_steps[env_idx] = []` — Assignment or configuration line; sets or updates a value.
+- L241: `                episodes_done[env_idx] += 1` — Assignment or configuration line; sets or updates a value.
+- L242: `                if episodes_done[env_idx] < episodes_per_env:` — Conditional branch; runs the following block when the condition is true.
+- L243: `                    env.reset_at(env_idx)` — Statement line; performs work as part of the current block.
+- L244: `(blank)` — Blank line for readability.
+- L245: `    for i, ret in enumerate(returns):` — Loop; repeats the block for each item.
+- L246: `        batch.returns[i] = 0.0 if ret is None else ret` — Assignment or configuration line; sets or updates a value.
+- L247: `(blank)` — Blank line for readability.
+- L248: `    return batch` — Return statement; sends a value back to the caller.
+- L249: `(blank)` — Blank line for readability.
+- L250: `(blank)` — Blank line for readability.
+- L251: `def train_candidate(` — Function definition for `train_candidate`.
+- L252: `    base_state: dict,` — Statement line; performs work as part of the current block.
+- L253: `    env_config: VectorEnvConfig,` — Statement line; performs work as part of the current block.
+- L254: `    args,` — Statement line; performs work as part of the current block.
+- L255: `    pool_states: list[dict],` — Statement line; performs work as part of the current block.
+- L256: `    rollout_pool,` — Statement line; performs work as part of the current block.
+- L257: `    batch_sizes: list[int],` — Statement line; performs work as part of the current block.
+- L258: `):` — Closes a previous block or literal.
+- L259: `    policy = TwoHeadPolicy(` — Assignment or configuration line; sets or updates a value.
+- L260: `        PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim),` — Assignment or configuration line; sets or updates a value.
+- L261: `        device=args.device,` — Assignment or configuration line; sets or updates a value.
+- L262: `    )` — Closes a previous block or literal.
+- L263: `    policy.load_state_dict(base_state)` — Statement line; performs work as part of the current block.
+- L264: `    optimizer = optim.Adam(policy.parameters(), lr=args.lr)` — Assignment or configuration line; sets or updates a value.
+- L265: `(blank)` — Blank line for readability.
+- L266: `    opponent_policies = []` — Assignment or configuration line; sets or updates a value.
+- L267: `    for state in pool_states:` — Loop; repeats the block for each item.
+- L268: `        opp = TwoHeadPolicy(PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim), device="cpu")` — Assignment or configuration line; sets or updates a value.
+- L269: `        opp.load_state_dict(state)` — Statement line; performs work as part of the current block.
+- L270: `        opponent_policies.append(opp)` — Statement line; performs work as part of the current block.
+- L271: `(blank)` — Blank line for readability.
+- L272: `    env = VectorNLHEEnv(env_config)` — Assignment or configuration line; sets or updates a value.
+- L273: `    total_episodes = 0` — Assignment or configuration line; sets or updates a value.
+- L274: `    updates = 0` — Assignment or configuration line; sets or updates a value.
+- L275: `    while total_episodes < args.episodes_per_agent:` — Loop; repeats the block while the condition is true.
+- L276: `        rollout_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L277: `        if rollout_pool:` — Conditional branch; runs the following block when the condition is true.
+- L278: `            policy_state = {k: v.detach().cpu() for k, v in policy.state_dict().items()}` — Assignment or configuration line; sets or updates a value.
+- L279: `            payloads = []` — Assignment or configuration line; sets or updates a value.
+- L280: `            for i, batch_size in enumerate(batch_sizes):` — Loop; repeats the block for each item.
+- L281: `                worker_config = env_config.__dict__.copy()` — Assignment or configuration line; sets or updates a value.
+- L282: `                worker_config["batch_size"] = batch_size` — Assignment or configuration line; sets or updates a value.
+- L283: `                worker_config["seed"] = args.seed + updates * args.rollout_workers + i` — Assignment or configuration line; sets or updates a value.
+- L284: `                worker_config["cpu_eval_workers"] = 0` — Assignment or configuration line; sets or updates a value.
+- L285: `                payloads.append(` — Statement line; performs work as part of the current block.
+- L286: `                    (` — Closes a previous block or literal.
+- L287: `                        policy_state,` — Statement line; performs work as part of the current block.
+- L288: `                        worker_config,` — Statement line; performs work as part of the current block.
+- L289: `                        args.rollout_episodes,` — Statement line; performs work as part of the current block.
+- L290: `                        worker_config["seed"],` — Statement line; performs work as part of the current block.
+- L291: `                        args.hidden_dim,` — Statement line; performs work as part of the current block.
+- L292: `                        pool_states,` — Statement line; performs work as part of the current block.
+- L293: `                        args.pool_prob,` — Statement line; performs work as part of the current block.
+- L294: `                    )` — Closes a previous block or literal.
+- L295: `                )` — Closes a previous block or literal.
+- L296: `            buffers = rollout_pool.starmap(collect_rollouts_league, payloads)` — Assignment or configuration line; sets or updates a value.
+- L297: `            batch = merge_buffers(buffers)` — Assignment or configuration line; sets or updates a value.
+- L298: `            total_episodes += int(sum(batch_sizes) * args.rollout_episodes)` — Assignment or configuration line; sets or updates a value.
+- L299: `        else:` — Else branch; runs when previous conditions did not match.
+- L300: `            batch = rollout_episode_steps(` — Assignment or configuration line; sets or updates a value.
+- L301: `                env,` — Statement line; performs work as part of the current block.
+- L302: `                policy,` — Statement line; performs work as part of the current block.
+- L303: `                opponent_policies,` — Statement line; performs work as part of the current block.
+- L304: `                args.pool_prob,` — Statement line; performs work as part of the current block.
+- L305: `                np.random.default_rng(args.seed),` — Statement line; performs work as part of the current block.
+- L306: `                episodes_per_env=args.rollout_episodes,` — Assignment or configuration line; sets or updates a value.
+- L307: `            )` — Closes a previous block or literal.
+- L308: `            total_episodes += int(env_config.batch_size * args.rollout_episodes)` — Assignment or configuration line; sets or updates a value.
+- L309: `        rollout_elapsed = time.time() - rollout_start` — Assignment or configuration line; sets or updates a value.
+- L310: `        if not batch.obs:` — Conditional branch; runs the following block when the condition is true.
+- L311: `            env.reset()` — Statement line; performs work as part of the current block.
+- L312: `            continue` — Skips the rest of this loop iteration.
+- L313: `        update_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L314: `        batch_tensors = batch.as_tensors(policy.device)` — Assignment or configuration line; sets or updates a value.
+- L315: `        ppo_update(` — Statement line; performs work as part of the current block.
+- L316: `            policy,` — Statement line; performs work as part of the current block.
+- L317: `            optimizer,` — Statement line; performs work as part of the current block.
+- L318: `            batch_tensors,` — Statement line; performs work as part of the current block.
+- L319: `            clip_ratio=args.clip_ratio,` — Assignment or configuration line; sets or updates a value.
+- L320: `            value_coef=args.value_coef,` — Assignment or configuration line; sets or updates a value.
+- L321: `            entropy_coef=args.entropy_coef,` — Assignment or configuration line; sets or updates a value.
+- L322: `            epochs=args.ppo_epochs,` — Assignment or configuration line; sets or updates a value.
+- L323: `            minibatch=args.minibatch,` — Assignment or configuration line; sets or updates a value.
+- L324: `        )` — Closes a previous block or literal.
+- L325: `        update_elapsed = time.time() - update_start` — Assignment or configuration line; sets or updates a value.
+- L326: `        updates += 1` — Assignment or configuration line; sets or updates a value.
+- L327: `        if args.log_every and updates % args.log_every == 0:` — Conditional branch; runs the following block when the condition is true.
+- L328: `            msg = (` — Assignment or configuration line; sets or updates a value.
+- L329: `                f"candidate_updates={updates} episodes={total_episodes} "` — Assignment or configuration line; sets or updates a value.
+- L330: `                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"` — Assignment or configuration line; sets or updates a value.
+- L331: `            )` — Closes a previous block or literal.
+- L332: `            if args.profile:` — Conditional branch; runs the following block when the condition is true.
+- L333: `                samples = len(batch.obs)` — Assignment or configuration line; sets or updates a value.
+- L334: `                total_sec = max(1e-6, rollout_elapsed + update_elapsed)` — Assignment or configuration line; sets or updates a value.
+- L335: `                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"` — Assignment or configuration line; sets or updates a value.
+- L336: `            print(msg, flush=True)` — Prints a log message to the console.
+- L337: `(blank)` — Blank line for readability.
+- L338: `    return policy.state_dict()` — Return statement; sends a value back to the caller.
+- L339: `(blank)` — Blank line for readability.
+- L340: `(blank)` — Blank line for readability.
+- L341: `def main():` — Function definition for `main`.
+- L342: `    parser = argparse.ArgumentParser(description="League training for prod NLHE (vectorized).")` — Assignment or configuration line; sets or updates a value.
+- L343: `    parser.add_argument("--batch-size", type=int, default=64)` — CLI flag definition for `--batch-size`.
+- L344: `    parser.add_argument("--num-players", type=int, default=6)` — CLI flag definition for `--num-players`.
+- L345: `    parser.add_argument("--stack", type=int, default=20000)` — CLI flag definition for `--stack`.
+- L346: `    parser.add_argument("--small-blind", type=int, default=50)` — CLI flag definition for `--small-blind`.
+- L347: `    parser.add_argument("--big-blind", type=int, default=100)` — CLI flag definition for `--big-blind`.
+- L348: `    parser.add_argument("--max-raises", type=int, default=0)` — CLI flag definition for `--max-raises`.
+- L349: `    parser.add_argument("--ante", type=int, default=0)` — CLI flag definition for `--ante`.
+- L350: `    parser.add_argument("--rake-pct", type=float, default=0.0)` — CLI flag definition for `--rake-pct`.
+- L351: `    parser.add_argument("--rake-cap", type=int, default=0)` — CLI flag definition for `--rake-cap`.
+- L352: `    parser.add_argument("--rake-cap-hand", type=int, default=0)` — CLI flag definition for `--rake-cap-hand`.
+- L353: `    parser.add_argument("--rake-cap-street", type=int, default=0)` — CLI flag definition for `--rake-cap-street`.
+- L354: `    parser.add_argument("--history-len", type=int, default=12)` — CLI flag definition for `--history-len`.
+- L355: `    parser.add_argument("--hands-per-episode", type=int, default=1)` — CLI flag definition for `--hands-per-episode`.
+- L356: `    parser.add_argument("--rounds", type=int, default=4)` — CLI flag definition for `--rounds`.
+- L357: `    parser.add_argument("--population", type=int, default=6)` — CLI flag definition for `--population`.
+- L358: `    parser.add_argument("--top-k", type=int, default=2)` — CLI flag definition for `--top-k`.
+- L359: `    parser.add_argument("--episodes-per-agent", type=int, default=20000)` — CLI flag definition for `--episodes-per-agent`.
+- L360: `    parser.add_argument("--rollout-episodes", type=int, default=4)` — CLI flag definition for `--rollout-episodes`.
+- L361: `    parser.add_argument("--hidden-dim", type=int, default=256)` — CLI flag definition for `--hidden-dim`.
+- L362: `    parser.add_argument("--lr", type=float, default=3e-4)` — CLI flag definition for `--lr`.
+- L363: `    parser.add_argument("--ppo-epochs", type=int, default=4)` — CLI flag definition for `--ppo-epochs`.
+- L364: `    parser.add_argument("--minibatch", type=int, default=2048)` — CLI flag definition for `--minibatch`.
+- L365: `    parser.add_argument("--clip-ratio", type=float, default=0.2)` — CLI flag definition for `--clip-ratio`.
+- L366: `    parser.add_argument("--entropy-coef", type=float, default=0.01)` — CLI flag definition for `--entropy-coef`.
+- L367: `    parser.add_argument("--value-coef", type=float, default=0.5)` — CLI flag definition for `--value-coef`.
+- L368: `    parser.add_argument("--seed", type=int, default=42)` — CLI flag definition for `--seed`.
+- L369: `    parser.add_argument("--device", default="cuda")` — CLI flag definition for `--device`.
+- L370: `    parser.add_argument("--log-every", type=int, default=10)` — CLI flag definition for `--log-every`.
+- L371: `    parser.add_argument("--rollout-workers", type=int, default=1)` — CLI flag definition for `--rollout-workers`.
+- L372: `    parser.add_argument("--cpu-eval-workers", type=int, default=0)` — CLI flag definition for `--cpu-eval-workers`.
+- L373: `    parser.add_argument("--cpu-eval-min-batch", type=int, default=8)` — CLI flag definition for `--cpu-eval-min-batch`.
+- L374: `    parser.add_argument("--eval-episodes", type=int, default=2000)` — CLI flag definition for `--eval-episodes`.
+- L375: `    parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="proxy")` — CLI flag definition for `--eval-opponent`.
+- L376: `    parser.add_argument("--lbr-rollouts", type=int, default=32)` — CLI flag definition for `--lbr-rollouts`.
+- L377: `    parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")` — CLI flag definition for `--lbr-bet-fracs`.
+- L378: `    parser.add_argument("--pool-size", type=int, default=8)` — CLI flag definition for `--pool-size`.
+- L379: `    parser.add_argument("--pool-prob", type=float, default=0.5)` — CLI flag definition for `--pool-prob`.
+- L380: `    parser.add_argument("--save-dir", default="experiments/prod_nlhe_league")` — CLI flag definition for `--save-dir`.
+- L381: `    parser.add_argument("--resume", default=None)` — CLI flag definition for `--resume`.
+- L382: `    parser.add_argument("--profile", action="store_true")` — CLI flag definition for `--profile`.
+- L383: `    args = parser.parse_args()` — Assignment or configuration line; sets or updates a value.
+- L384: `(blank)` — Blank line for readability.
+- L385: `    np.random.seed(args.seed)` — Statement line; performs work as part of the current block.
+- L386: `    torch.manual_seed(args.seed)` — Statement line; performs work as part of the current block.
+- L387: `(blank)` — Blank line for readability.
+- L388: `    env_config = VectorEnvConfig(` — Assignment or configuration line; sets or updates a value.
+- L389: `        batch_size=args.batch_size,` — Assignment or configuration line; sets or updates a value.
+- L390: `        num_players=args.num_players,` — Assignment or configuration line; sets or updates a value.
+- L391: `        stack=args.stack,` — Assignment or configuration line; sets or updates a value.
+- L392: `        small_blind=args.small_blind,` — Assignment or configuration line; sets or updates a value.
+- L393: `        big_blind=args.big_blind,` — Assignment or configuration line; sets or updates a value.
+- L394: `        max_raises_per_round=args.max_raises,` — Assignment or configuration line; sets or updates a value.
+- L395: `        ante=args.ante,` — Assignment or configuration line; sets or updates a value.
+- L396: `        rake_pct=args.rake_pct,` — Assignment or configuration line; sets or updates a value.
+- L397: `        rake_cap=args.rake_cap,` — Assignment or configuration line; sets or updates a value.
+- L398: `        rake_cap_per_hand=args.rake_cap_hand,` — Assignment or configuration line; sets or updates a value.
+- L399: `        rake_cap_per_street=args.rake_cap_street,` — Assignment or configuration line; sets or updates a value.
+- L400: `        history_len=args.history_len,` — Assignment or configuration line; sets or updates a value.
+- L401: `        hands_per_episode=args.hands_per_episode,` — Assignment or configuration line; sets or updates a value.
+- L402: `        seed=args.seed,` — Assignment or configuration line; sets or updates a value.
+- L403: `        cpu_eval_workers=args.cpu_eval_workers,` — Assignment or configuration line; sets or updates a value.
+- L404: `        cpu_eval_min_batch=args.cpu_eval_min_batch,` — Assignment or configuration line; sets or updates a value.
+- L405: `    )` — Closes a previous block or literal.
+- L406: `(blank)` — Blank line for readability.
+- L407: `    rollout_pool = None` — Assignment or configuration line; sets or updates a value.
+- L408: `    batch_sizes = _split_batch_sizes(args.batch_size, args.rollout_workers)` — Assignment or configuration line; sets or updates a value.
+- L409: `    if args.rollout_workers > 1:` — Conditional branch; runs the following block when the condition is true.
+- L410: `        ctx = mp.get_context("spawn")` — Assignment or configuration line; sets or updates a value.
+- L411: `        rollout_pool = ctx.Pool(processes=args.rollout_workers)` — Assignment or configuration line; sets or updates a value.
+- L412: `(blank)` — Blank line for readability.
+- L413: `    base_policy = TwoHeadPolicy(` — Assignment or configuration line; sets or updates a value.
+- L414: `        PolicyConfig(obs_dim=env_obs_dim(env_config), hidden_dim=args.hidden_dim),` — Assignment or configuration line; sets or updates a value.
+- L415: `        device=args.device,` — Assignment or configuration line; sets or updates a value.
+- L416: `    )` — Closes a previous block or literal.
+- L417: `    if args.resume:` — Conditional branch; runs the following block when the condition is true.
+- L418: `        state = torch.load(args.resume, map_location="cpu")` — Assignment or configuration line; sets or updates a value.
+- L419: `        base_policy.load_state_dict(state["model"])` — Statement line; performs work as part of the current block.
+- L420: `        print(f"resume_from={args.resume}")` — Prints a log message to the console.
+- L421: `(blank)` — Blank line for readability.
+- L422: `    base_state = {k: v.detach().cpu() for k, v in base_policy.state_dict().items()}` — Assignment or configuration line; sets or updates a value.
+- L423: `    pool_states: list[dict] = []` — Assignment or configuration line; sets or updates a value.
+- L424: `(blank)` — Blank line for readability.
+- L425: `    save_root = pathlib.Path(args.save_dir)` — Assignment or configuration line; sets or updates a value.
+- L426: `    save_root.mkdir(parents=True, exist_ok=True)` — Assignment or configuration line; sets or updates a value.
+- L427: `(blank)` — Blank line for readability.
+- L428: `    bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]` — Assignment or configuration line; sets or updates a value.
+- L429: `(blank)` — Blank line for readability.
+- L430: `    for round_idx in range(args.rounds):` — Loop; repeats the block for each item.
+- L431: `        round_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L432: `        print(f"round_start={round_idx} population={args.population}", flush=True)` — Prints a log message to the console.
+- L433: `        candidates = []` — Assignment or configuration line; sets or updates a value.
+- L434: `        scores = []` — Assignment or configuration line; sets or updates a value.
+- L435: `        for agent_idx in range(args.population):` — Loop; repeats the block for each item.
+- L436: `            train_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L437: `            trained_state = train_candidate(base_state, env_config, args, pool_states, rollout_pool, batch_sizes)` — Assignment or configuration line; sets or updates a value.
+- L438: `            train_elapsed = time.time() - train_start` — Assignment or configuration line; sets or updates a value.
+- L439: `            candidates.append(trained_state)` — Statement line; performs work as part of the current block.
+- L440: `            eval_start = time.time()` — Assignment or configuration line; sets or updates a value.
+- L441: `            score = evaler.evaluate(` — Assignment or configuration line; sets or updates a value.
+- L442: `                trained_state,` — Statement line; performs work as part of the current block.
+- L443: `                env_config,` — Statement line; performs work as part of the current block.
+- L444: `                args.eval_episodes,` — Statement line; performs work as part of the current block.
+- L445: `                opponent=args.eval_opponent,` — Assignment or configuration line; sets or updates a value.
+- L446: `                lbr_rollouts=args.lbr_rollouts,` — Assignment or configuration line; sets or updates a value.
+- L447: `                lbr_bet_fracs=bet_fracs,` — Assignment or configuration line; sets or updates a value.
+- L448: `            )` — Closes a previous block or literal.
+- L449: `            eval_elapsed = time.time() - eval_start` — Assignment or configuration line; sets or updates a value.
+- L450: `            scores.append(score)` — Statement line; performs work as part of the current block.
+- L451: `            if args.profile:` — Conditional branch; runs the following block when the condition is true.
+- L452: `                print(` — Prints a log message to the console.
+- L453: `                    f"round={round_idx} agent={agent_idx} score={score:.4f} "` — Assignment or configuration line; sets or updates a value.
+- L454: `                    f"train_sec={train_elapsed:.1f} eval_sec={eval_elapsed:.1f}",` — Assignment or configuration line; sets or updates a value.
+- L455: `                    flush=True,` — Assignment or configuration line; sets or updates a value.
+- L456: `                )` — Closes a previous block or literal.
+- L457: `            else:` — Else branch; runs when previous conditions did not match.
+- L458: `                print(f"round={round_idx} agent={agent_idx} score={score:.4f}", flush=True)` — Prints a log message to the console.
+- L459: `(blank)` — Blank line for readability.
+- L460: `            agent_dir = save_root / f"round_{round_idx:02d}"` — Assignment or configuration line; sets or updates a value.
+- L461: `            agent_dir.mkdir(parents=True, exist_ok=True)` — Assignment or configuration line; sets or updates a value.
+- L462: `            path = agent_dir / f"agent_{agent_idx:02d}.pt"` — Assignment or configuration line; sets or updates a value.
+- L463: `            torch.save(` — Statement line; performs work as part of the current block.
+- L464: `                {` — Closes a previous block or literal.
+- L465: `                    "model": trained_state,` — Statement line; performs work as part of the current block.
+- L466: `                    "config": env_config.__dict__,` — Statement line; performs work as part of the current block.
+- L467: `                    "hidden_dim": args.hidden_dim,` — Statement line; performs work as part of the current block.
+- L468: `                },` — Closes a previous block or literal.
+- L469: `                path,` — Statement line; performs work as part of the current block.
+- L470: `            )` — Closes a previous block or literal.
+- L471: `(blank)` — Blank line for readability.
+- L472: `        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)` — Assignment or configuration line; sets or updates a value.
+- L473: `        top = ranked[: max(1, args.top_k)]` — Assignment or configuration line; sets or updates a value.
+- L474: `        base_state = candidates[top[0]]` — Assignment or configuration line; sets or updates a value.
+- L475: `(blank)` — Blank line for readability.
+- L476: `        for idx in top:` — Loop; repeats the block for each item.
+- L477: `            pool_states.append(candidates[idx])` — Statement line; performs work as part of the current block.
+- L478: `        if args.pool_size and len(pool_states) > args.pool_size:` — Conditional branch; runs the following block when the condition is true.
+- L479: `            pool_states = pool_states[-args.pool_size :]` — Assignment or configuration line; sets or updates a value.
+- L480: `(blank)` — Blank line for readability.
+- L481: `        best_score = scores[top[0]]` — Assignment or configuration line; sets or updates a value.
+- L482: `        if args.profile:` — Conditional branch; runs the following block when the condition is true.
+- L483: `            round_elapsed = time.time() - round_start` — Assignment or configuration line; sets or updates a value.
+- L484: `            print(` — Prints a log message to the console.
+- L485: `                f"round_end={round_idx} best_score={best_score:.4f} "` — Assignment or configuration line; sets or updates a value.
+- L486: `                f"round_sec={round_elapsed:.1f}",` — Assignment or configuration line; sets or updates a value.
+- L487: `                flush=True,` — Assignment or configuration line; sets or updates a value.
+- L488: `            )` — Closes a previous block or literal.
+- L489: `        else:` — Else branch; runs when previous conditions did not match.
+- L490: `            print(f"round_end={round_idx} best_score={best_score:.4f}", flush=True)` — Prints a log message to the console.
+- L491: `(blank)` — Blank line for readability.
+- L492: `    if rollout_pool:` — Conditional branch; runs the following block when the condition is true.
+- L493: `        rollout_pool.close()` — Statement line; performs work as part of the current block.
+- L494: `        rollout_pool.join()` — Statement line; performs work as part of the current block.
+- L495: `(blank)` — Blank line for readability.
+- L496: `(blank)` — Blank line for readability.
+- L497: `if __name__ == "__main__":` — Conditional branch; runs the following block when the condition is true.
+- L498: `    main()` — Statement line; performs work as part of the current block.
