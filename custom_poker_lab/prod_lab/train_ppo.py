@@ -116,6 +116,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=10000)
+    parser.add_argument("--log-every-updates", type=int, default=0)
     parser.add_argument("--save-every", type=int, default=50000)
     parser.add_argument("--save-dir", default="experiments/prod_nlhe_ppo")
     parser.add_argument("--eval-every", type=int, default=0)
@@ -169,6 +170,7 @@ def main():
     step_player_ids = []
     returns = []
 
+    update_idx = 0
     while total_episodes < args.episodes:
         batch = TrajectoryBuffer()
         episode_steps = [[] for _ in range(env_config.batch_size)]
@@ -177,10 +179,15 @@ def main():
         returns = []
         episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)
 
+        rollout_start = time.time()
         while np.any(episodes_done < args.rollout_episodes):
             active_envs = np.where(~env.episode_over)[0]
             if active_envs.size == 0:
-                break
+                for env_idx in range(env_config.batch_size):
+                    if episodes_done[env_idx] < args.rollout_episodes:
+                        env.reset_at(env_idx)
+                obs_np, mask_np, current_players = env.get_obs()
+                continue
             obs_active = obs_np[active_envs]
             mask_active = mask_np[active_envs]
 
@@ -227,8 +234,13 @@ def main():
                 ret = 0.0
             batch.returns[i] = ret
 
+        if not batch.obs:
+            obs_np, mask_np, current_players = env.get_obs()
+            continue
+
         total_episodes += int(env_config.batch_size * args.rollout_episodes)
         batch_tensors = batch.as_tensors(policy.device)
+        update_start = time.time()
         ppo_update(
             policy,
             optimizer,
@@ -239,10 +251,24 @@ def main():
             epochs=args.ppo_epochs,
             minibatch=args.minibatch,
         )
+        update_idx += 1
+        rollout_elapsed = update_start - rollout_start
+        update_elapsed = time.time() - update_start
 
         if args.log_every and total_episodes % args.log_every == 0:
             elapsed = time.time() - start
-            print(f"episodes={total_episodes} elapsed={elapsed:.1f}s", flush=True)
+            print(
+                f"episodes={total_episodes} updates={update_idx} elapsed={elapsed:.1f}s "
+                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}",
+                flush=True,
+            )
+        if args.log_every_updates and update_idx % args.log_every_updates == 0:
+            elapsed = time.time() - start
+            print(
+                f"update={update_idx} episodes={total_episodes} elapsed={elapsed:.1f}s "
+                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}",
+                flush=True,
+            )
 
         if args.save_every and total_episodes % args.save_every == 0:
             save_dir = pathlib.Path(args.save_dir)
