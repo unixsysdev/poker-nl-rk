@@ -121,7 +121,7 @@ def main():
     parser.add_argument("--save-dir", default="experiments/prod_nlhe_ppo")
     parser.add_argument("--eval-every", type=int, default=0)
     parser.add_argument("--eval-episodes", type=int, default=2000)
-    parser.add_argument("--eval-opponent", choices=["random", "lbr", "proxy"], default="random")
+    parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="random")
     parser.add_argument("--lbr-rollouts", type=int, default=32)
     parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")
     args = parser.parse_args()

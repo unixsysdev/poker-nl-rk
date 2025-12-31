@@ -276,7 +276,7 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--eval-episodes", type=int, default=2000)
-    parser.add_argument("--eval-opponent", choices=["random", "lbr", "proxy"], default="proxy")
+    parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="proxy")
     parser.add_argument("--lbr-rollouts", type=int, default=32)
     parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")
     parser.add_argument("--pool-size", type=int, default=8)

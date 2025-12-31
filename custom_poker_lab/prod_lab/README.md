@@ -40,6 +40,16 @@ python custom_poker_lab/prod_lab/eval.py \
   --episodes 2000
 ```
 
+Depth-limited best response (slower, stronger proxy):
+
+```bash
+python custom_poker_lab/prod_lab/eval.py \
+  --policy experiments/prod_nlhe_ppo/policy_ep_050000.pt \
+  --opponent dlbr --br-depth 2 --br-other-samples 1 \
+  --lbr-rollouts 16 --lbr-bet-fracs 0.25,0.5,1.0 \
+  --episodes 500
+```
+
 ## League Training (Population)
 
 ```bash
