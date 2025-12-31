@@ -22,6 +22,27 @@ python custom_poker_lab/cuda_lab/eval.py \
   --episodes 2000 --device cuda
 ```
 
+LBR / DLBR proxy:
+
+```bash
+python custom_poker_lab/cuda_lab/eval.py \
+  --policy experiments/cuda_nlhe_ppo/policy_ep_100000.pt \
+  --opponent dlbr --br-depth 2 --br-other-samples 1 \
+  --lbr-rollouts 16 --lbr-bet-fracs 0.25,0.5,1.0 \
+  --episodes 500 --device cuda
+```
+
+## League Training (Population)
+
+```bash
+python custom_poker_lab/cuda_lab/train_league.py --batch-size 128 --num-players 6 \
+  --rounds 4 --population 6 --top-k 2 \
+  --episodes-per-agent 20000 --rollout-episodes 4 --device cuda \
+  --eval-episodes 2000 --eval-opponent proxy \
+  --pool-size 8 --pool-prob 0.5 \
+  --save-dir experiments/cuda_nlhe_league
+```
+
 Notes:
 - Continuous raise sizing: bet fraction scales **from min-raise to all-in**.
 - Hand evaluation is still CPU (Treys). Replace with a GPU evaluator for full

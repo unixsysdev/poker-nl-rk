@@ -114,6 +114,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every-updates", type=int, default=5)
+    parser.add_argument("--profile", action="store_true")
     parser.add_argument("--save-every", type=int, default=50000)
     parser.add_argument("--save-dir", default="experiments/cuda_nlhe_ppo")
     args = parser.parse_args()
@@ -147,6 +148,14 @@ def main():
     total_episodes = 0
     updates = 0
     start = time.time()
+    print(
+        "train_start "
+        f"batch={env_config.batch_size} players={env_config.num_players} "
+        f"stack={env_config.stack} blinds={env_config.small_blind}/{env_config.big_blind} "
+        f"max_raises={env_config.max_raises_per_round} hands_per_ep={env_config.hands_per_episode} "
+        f"device={args.device}",
+        flush=True,
+    )
     obs, mask, current = env.get_obs()
     while total_episodes < args.episodes:
         batch = TrajectoryBuffer()
@@ -155,6 +164,7 @@ def main():
         returns = []
         episodes_done = torch.zeros(env_config.batch_size, device=env.device, dtype=torch.int64)
 
+        rollout_start = time.time()
         while torch.any(episodes_done < args.rollout_episodes):
             active_envs = torch.where(~env.episode_over)[0]
             if active_envs.numel() == 0:
@@ -213,6 +223,7 @@ def main():
 
         total_episodes += int(env_config.batch_size * args.rollout_episodes)
         batch_tensors = batch.as_tensors(policy.device)
+        update_start = time.time()
         ppo_update(
             policy,
             optimizer,
@@ -224,9 +235,19 @@ def main():
             minibatch=args.minibatch,
         )
         updates += 1
+        rollout_elapsed = update_start - rollout_start
+        update_elapsed = time.time() - update_start
         if args.log_every_updates and updates % args.log_every_updates == 0:
             elapsed = time.time() - start
-            print(f"update={updates} episodes={total_episodes} elapsed={elapsed:.1f}s", flush=True)
+            msg = (
+                f"update={updates} episodes={total_episodes} elapsed={elapsed:.1f}s "
+                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"
+            )
+            if args.profile:
+                samples = len(batch.obs)
+                total_sec = max(1e-6, rollout_elapsed + update_elapsed)
+                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"
+            print(msg, flush=True)
 
         if args.save_every and total_episodes % args.save_every == 0:
             save_dir = pathlib.Path(args.save_dir)
