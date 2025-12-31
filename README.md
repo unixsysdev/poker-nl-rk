@@ -220,6 +220,8 @@ see `custom_poker_lab/README.md`.
 
 For the vectorized, high-throughput engine, see `custom_poker_lab/prod_lab/README.md`.
 
+For the CUDA-native environment, see `custom_poker_lab/cuda_lab/README.md`.
+
 Evaluate vs a local best-response proxy (LBR):
 
 ```bash

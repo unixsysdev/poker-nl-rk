@@ -5,7 +5,6 @@ import pathlib
 import sys
 import time
 
-import numpy as np
 import torch
 from torch import nn, optim
 
@@ -14,8 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from custom_poker_lab.poker_policy import PolicyConfig, TwoHeadPolicy, TrajectoryBuffer
-from custom_poker_lab.prod_lab.vector_env import VectorEnvConfig, VectorNLHEEnv
-from custom_poker_lab.prod_lab import eval as evaler
+from custom_poker_lab.cuda_lab.cuda_env import CudaEnvConfig, CudaNLHEEnv
 
 
 def sample_actions(policy: TwoHeadPolicy, obs: torch.Tensor, mask: torch.Tensor):
@@ -90,8 +88,8 @@ def ppo_update(policy, optimizer, batch, clip_ratio, value_coef, entropy_coef, e
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Vectorized PPO for production-grade NLHE env.")
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser = argparse.ArgumentParser(description="CUDA vectorized PPO for NLHE.")
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-players", type=int, default=6)
     parser.add_argument("--stack", type=int, default=20000)
     parser.add_argument("--small-blind", type=int, default=50)
@@ -109,28 +107,20 @@ def main():
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--ppo-epochs", type=int, default=4)
-    parser.add_argument("--minibatch", type=int, default=2048)
+    parser.add_argument("--minibatch", type=int, default=4096)
     parser.add_argument("--clip-ratio", type=float, default=0.2)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--value-coef", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--log-every", type=int, default=10000)
-    parser.add_argument("--log-every-updates", type=int, default=0)
-    parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--log-every-updates", type=int, default=5)
     parser.add_argument("--save-every", type=int, default=50000)
-    parser.add_argument("--save-dir", default="experiments/prod_nlhe_ppo")
-    parser.add_argument("--eval-every", type=int, default=0)
-    parser.add_argument("--eval-episodes", type=int, default=2000)
-    parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="random")
-    parser.add_argument("--lbr-rollouts", type=int, default=32)
-    parser.add_argument("--lbr-bet-fracs", default="0.25,0.5,1.0")
+    parser.add_argument("--save-dir", default="experiments/cuda_nlhe_ppo")
     args = parser.parse_args()
 
-    np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    env_config = VectorEnvConfig(
+    env_config = CudaEnvConfig(
         batch_size=args.batch_size,
         num_players=args.num_players,
         stack=args.stack,
@@ -145,8 +135,9 @@ def main():
         history_len=args.history_len,
         hands_per_episode=args.hands_per_episode,
         seed=args.seed,
+        device=args.device,
     )
-    env = VectorNLHEEnv(env_config)
+    env = CudaNLHEEnv(env_config)
     policy = TwoHeadPolicy(
         PolicyConfig(obs_dim=env.obs_dim, hidden_dim=args.hidden_dim),
         device=args.device,
@@ -154,61 +145,44 @@ def main():
     optimizer = optim.Adam(policy.parameters(), lr=args.lr)
 
     total_episodes = 0
+    updates = 0
     start = time.time()
-    print(
-        "train_start "
-        f"batch={env_config.batch_size} players={env_config.num_players} "
-        f"stack={env_config.stack} blinds={env_config.small_blind}/{env_config.big_blind} "
-        f"max_raises={env_config.max_raises_per_round} "
-        f"hands_per_ep={env_config.hands_per_episode} "
-        f"device={args.device}",
-        flush=True,
-    )
-
-    obs_np, mask_np, current_players = env.get_obs()
-    episode_steps = [[] for _ in range(env_config.batch_size)]
-    step_env_ids = []
-    step_player_ids = []
-    returns = []
-
-    update_idx = 0
+    obs, mask, current = env.get_obs()
     while total_episodes < args.episodes:
         batch = TrajectoryBuffer()
         episode_steps = [[] for _ in range(env_config.batch_size)]
-        step_env_ids = []
         step_player_ids = []
         returns = []
-        episodes_done = np.zeros(env_config.batch_size, dtype=np.int64)
+        episodes_done = torch.zeros(env_config.batch_size, device=env.device, dtype=torch.int64)
 
-        rollout_start = time.time()
-        while np.any(episodes_done < args.rollout_episodes):
-            active_envs = np.where(~env.episode_over)[0]
-            if active_envs.size == 0:
+        while torch.any(episodes_done < args.rollout_episodes):
+            active_envs = torch.where(~env.episode_over)[0]
+            if active_envs.numel() == 0:
                 for env_idx in range(env_config.batch_size):
-                    if episodes_done[env_idx] < args.rollout_episodes:
+                    if int(episodes_done[env_idx].item()) < args.rollout_episodes:
                         env.reset_at(env_idx)
-                obs_np, mask_np, current_players = env.get_obs()
+                obs, mask, current = env.get_obs()
                 continue
-            obs_active = obs_np[active_envs]
-            mask_active = mask_np[active_envs]
 
-            obs = torch.tensor(obs_active, dtype=torch.float32, device=policy.device)
-            masks = torch.tensor(mask_active, dtype=torch.float32, device=policy.device)
-            action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(policy, obs, masks)
+            obs_active = obs[active_envs]
+            mask_active = mask[active_envs]
 
-            action_type_np = np.ones(env_config.batch_size, dtype=np.int64)
-            bet_frac_np = np.zeros(env_config.batch_size, dtype=np.float32)
-            action_type_np[active_envs] = action_type.detach().cpu().numpy()
-            bet_frac_np[active_envs] = bet_frac.detach().cpu().numpy()
+            action_type, bet_frac, logprob, value, entropy, raise_mask = sample_actions(
+                policy, obs_active, mask_active
+            )
 
-            for idx, env_idx in enumerate(active_envs):
-                step_env_ids.append(int(env_idx))
-                step_player_ids.append(int(current_players[env_idx]))
+            action_types = torch.ones(env_config.batch_size, device=env.device, dtype=torch.int64)
+            bet_fracs = torch.zeros(env_config.batch_size, device=env.device, dtype=torch.float32)
+            action_types[active_envs] = action_type
+            bet_fracs[active_envs] = bet_frac
+
+            for env_idx in active_envs.tolist():
+                step_player_ids.append(int(current[env_idx].item()))
                 returns.append(None)
                 episode_steps[env_idx].append(len(returns) - 1)
 
-            batch.obs.extend(obs_active)
-            batch.masks.extend(mask_active)
+            batch.obs.extend(obs_active.detach().cpu().numpy())
+            batch.masks.extend(mask_active.detach().cpu().numpy())
             batch.action_types.extend(action_type.detach().cpu().numpy().tolist())
             batch.bet_fracs.extend(bet_frac.detach().cpu().numpy().tolist())
             batch.logprobs.extend(logprob.detach().cpu())
@@ -217,31 +191,28 @@ def main():
             batch.raise_masks.extend(raise_mask.detach().cpu().tolist())
             batch.returns.extend([0.0] * obs_active.shape[0])
 
-            obs_np, mask_np, current_players = env.step(action_type_np, bet_frac_np)
+            obs, mask, current = env.step(action_types, bet_fracs)
 
             for env_idx in range(env_config.batch_size):
-                if env.episode_over[env_idx]:
+                if bool(env.episode_over[env_idx].item()):
                     payoffs = env.get_payoffs()[env_idx]
                     for idx in episode_steps[env_idx]:
                         player = step_player_ids[idx]
-                        returns[idx] = float(payoffs[player])
+                        returns[idx] = float(payoffs[player].item())
                     episode_steps[env_idx] = []
                     episodes_done[env_idx] += 1
-                    if episodes_done[env_idx] < args.rollout_episodes:
+                    if int(episodes_done[env_idx].item()) < args.rollout_episodes:
                         env.reset_at(env_idx)
 
         for i, ret in enumerate(returns):
-            if ret is None:
-                ret = 0.0
-            batch.returns[i] = ret
+            batch.returns[i] = 0.0 if ret is None else ret
 
         if not batch.obs:
-            obs_np, mask_np, current_players = env.get_obs()
+            obs, mask, current = env.get_obs()
             continue
 
         total_episodes += int(env_config.batch_size * args.rollout_episodes)
         batch_tensors = batch.as_tensors(policy.device)
-        update_start = time.time()
         ppo_update(
             policy,
             optimizer,
@@ -252,32 +223,10 @@ def main():
             epochs=args.ppo_epochs,
             minibatch=args.minibatch,
         )
-        update_idx += 1
-        rollout_elapsed = update_start - rollout_start
-        update_elapsed = time.time() - update_start
-
-        if args.log_every and total_episodes % args.log_every == 0:
+        updates += 1
+        if args.log_every_updates and updates % args.log_every_updates == 0:
             elapsed = time.time() - start
-            msg = (
-                f"episodes={total_episodes} updates={update_idx} elapsed={elapsed:.1f}s "
-                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"
-            )
-            if args.profile:
-                samples = len(batch.obs)
-                total_sec = max(1e-6, rollout_elapsed + update_elapsed)
-                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"
-            print(msg, flush=True)
-        if args.log_every_updates and update_idx % args.log_every_updates == 0:
-            elapsed = time.time() - start
-            msg = (
-                f"update={update_idx} episodes={total_episodes} elapsed={elapsed:.1f}s "
-                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"
-            )
-            if args.profile:
-                samples = len(batch.obs)
-                total_sec = max(1e-6, rollout_elapsed + update_elapsed)
-                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"
-            print(msg, flush=True)
+            print(f"update={updates} episodes={total_episodes} elapsed={elapsed:.1f}s", flush=True)
 
         if args.save_every and total_episodes % args.save_every == 0:
             save_dir = pathlib.Path(args.save_dir)
@@ -294,18 +243,6 @@ def main():
                 path,
             )
             print(f"checkpoint_saved={path}")
-
-        if args.eval_every and total_episodes % args.eval_every == 0:
-            bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]
-            score = evaler.evaluate(
-                policy.state_dict(),
-                env_config,
-                args.eval_episodes,
-                opponent=args.eval_opponent,
-                lbr_rollouts=args.lbr_rollouts,
-                lbr_bet_fracs=bet_fracs,
-            )
-            print(f"eval@{total_episodes} opponent={args.eval_opponent} avg_return={score:.4f}", flush=True)
 
 
 if __name__ == "__main__":

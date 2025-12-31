@@ -283,6 +283,7 @@ def main():
     parser.add_argument("--pool-prob", type=float, default=0.5)
     parser.add_argument("--save-dir", default="experiments/prod_nlhe_league")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
 
     np.random.seed(args.seed)
@@ -323,12 +324,16 @@ def main():
     bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]
 
     for round_idx in range(args.rounds):
+        round_start = time.time()
         print(f"round_start={round_idx} population={args.population}", flush=True)
         candidates = []
         scores = []
         for agent_idx in range(args.population):
+            train_start = time.time()
             trained_state = train_candidate(base_state, env_config, args, pool_states)
+            train_elapsed = time.time() - train_start
             candidates.append(trained_state)
+            eval_start = time.time()
             score = evaler.evaluate(
                 trained_state,
                 env_config,
@@ -337,8 +342,16 @@ def main():
                 lbr_rollouts=args.lbr_rollouts,
                 lbr_bet_fracs=bet_fracs,
             )
+            eval_elapsed = time.time() - eval_start
             scores.append(score)
-            print(f"round={round_idx} agent={agent_idx} score={score:.4f}", flush=True)
+            if args.profile:
+                print(
+                    f"round={round_idx} agent={agent_idx} score={score:.4f} "
+                    f"train_sec={train_elapsed:.1f} eval_sec={eval_elapsed:.1f}",
+                    flush=True,
+                )
+            else:
+                print(f"round={round_idx} agent={agent_idx} score={score:.4f}", flush=True)
 
             agent_dir = save_root / f"round_{round_idx:02d}"
             agent_dir.mkdir(parents=True, exist_ok=True)
@@ -362,7 +375,15 @@ def main():
             pool_states = pool_states[-args.pool_size :]
 
         best_score = scores[top[0]]
-        print(f"round_end={round_idx} best_score={best_score:.4f}", flush=True)
+        if args.profile:
+            round_elapsed = time.time() - round_start
+            print(
+                f"round_end={round_idx} best_score={best_score:.4f} "
+                f"round_sec={round_elapsed:.1f}",
+                flush=True,
+            )
+        else:
+            print(f"round_end={round_idx} best_score={best_score:.4f}", flush=True)
 
 
 if __name__ == "__main__":

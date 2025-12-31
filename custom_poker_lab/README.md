@@ -75,6 +75,10 @@ python custom_poker_lab/poker_eval.py \
 
 For the high-throughput vectorized engine, see `custom_poker_lab/prod_lab/README.md`.
 
+## CUDA-Native Env
+
+For the torch-native CUDA environment, see `custom_poker_lab/cuda_lab/README.md`.
+
 ## League Training (Population)
 
 ```bash
