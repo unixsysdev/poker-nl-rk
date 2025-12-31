@@ -216,7 +216,9 @@ def train_candidate(base_state: dict, env_config: CudaEnvConfig, args, pool_stat
     env = CudaNLHEEnv(env_config)
     total_episodes = 0
     updates = 0
+    start = time.time()
     while total_episodes < args.episodes_per_agent:
+        rollout_start = time.time()
         batch = rollout_episode_steps(
             env,
             policy,
@@ -230,6 +232,7 @@ def train_candidate(base_state: dict, env_config: CudaEnvConfig, args, pool_stat
             continue
         total_episodes += int(env_config.batch_size * args.rollout_episodes)
         batch_tensors = batch.as_tensors(policy.device)
+        update_start = time.time()
         ppo_update(
             policy,
             optimizer,
@@ -241,8 +244,19 @@ def train_candidate(base_state: dict, env_config: CudaEnvConfig, args, pool_stat
             minibatch=args.minibatch,
         )
         updates += 1
+        rollout_elapsed = update_start - rollout_start
+        update_elapsed = time.time() - update_start
         if args.log_every and updates % args.log_every == 0:
-            print(f"candidate_updates={updates} episodes={total_episodes}", flush=True)
+            elapsed = time.time() - start
+            msg = (
+                f"candidate_updates={updates} episodes={total_episodes} elapsed={elapsed:.1f}s "
+                f"rollout_sec={rollout_elapsed:.2f} ppo_sec={update_elapsed:.2f}"
+            )
+            if args.profile:
+                samples = len(batch.obs)
+                total_sec = max(1e-6, rollout_elapsed + update_elapsed)
+                msg += f" samples={samples} samples_per_sec={samples/total_sec:.1f}"
+            print(msg, flush=True)
 
     return policy.state_dict()
 
@@ -277,6 +291,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--profile", action="store_true")
     parser.add_argument("--eval-episodes", type=int, default=2000)
     parser.add_argument("--eval-opponent", choices=["random", "lbr", "dlbr", "proxy"], default="proxy")
     parser.add_argument("--lbr-rollouts", type=int, default=32)
@@ -325,10 +340,12 @@ def main():
     bet_fracs = [float(x) for x in args.lbr_bet_fracs.split(",") if x]
 
     for round_idx in range(args.rounds):
+        round_start = time.time()
         print(f"round_start={round_idx} population={args.population}", flush=True)
         candidates = []
         scores = []
         for agent_idx in range(args.population):
+            print(f"candidate_start round={round_idx} agent={agent_idx}", flush=True)
             trained_state = train_candidate(base_state, env_config, args, pool_states)
             candidates.append(trained_state)
             score = evaler.evaluate(
@@ -366,7 +383,14 @@ def main():
             pool_states = pool_states[-args.pool_size :]
 
         best_score = scores[top[0]]
-        print(f"round_end={round_idx} best_score={best_score:.4f}", flush=True)
+        if args.profile:
+            round_elapsed = time.time() - round_start
+            print(
+                f"round_end={round_idx} best_score={best_score:.4f} round_sec={round_elapsed:.1f}",
+                flush=True,
+            )
+        else:
+            print(f"round_end={round_idx} best_score={best_score:.4f}", flush=True)
 
 
 if __name__ == "__main__":
