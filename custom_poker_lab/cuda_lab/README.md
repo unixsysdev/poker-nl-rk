@@ -11,6 +11,7 @@ largely on GPU. Showdown evaluation still uses **Treys** on CPU, so this is not
 python custom_poker_lab/cuda_lab/train_ppo.py --batch-size 256 --num-players 6 \
   --episodes 400000 --rollout-episodes 8 --device cuda \
   --ppo-epochs 8 --minibatch 8192 \
+  --cpu-eval-workers 4 \
   --save-every 100000 --save-dir experiments/cuda_nlhe_ppo
 ```
 
@@ -39,6 +40,7 @@ python custom_poker_lab/cuda_lab/train_league.py --batch-size 128 --num-players 
   --rounds 4 --population 6 --top-k 2 \
   --episodes-per-agent 20000 --rollout-episodes 4 --device cuda \
   --eval-episodes 2000 --eval-opponent proxy \
+  --cpu-eval-workers 4 \
   --pool-size 8 --pool-prob 0.5 \
   --save-dir experiments/cuda_nlhe_league
 ```

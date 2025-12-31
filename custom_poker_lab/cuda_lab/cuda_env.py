@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
+
+import atexit
+import multiprocessing as mp
 
 import torch
 
@@ -28,6 +31,16 @@ class CudaEnvConfig:
     hands_per_episode: int = 1
     seed: int = 42
     device: str = "cuda"
+    cpu_eval_workers: int = 0
+
+
+def _score_payload(payload: Tuple[List[int], List[Tuple[int, List[int]]]]):
+    board, hole_cards = payload
+    evaluator = Evaluator()
+    scores = []
+    for player_idx, hole in hole_cards:
+        scores.append((player_idx, evaluator.evaluate(board, hole)))
+    return scores
 
 
 class CudaNLHEEnv:
@@ -38,6 +51,11 @@ class CudaNLHEEnv:
         self.full_deck = torch.tensor(Deck.GetFullDeck(), device=self.device, dtype=torch.int64)
         self.card_index = {int(card): idx for idx, card in enumerate(Deck.GetFullDeck())}
         self.obs_dim = 52 + 5 + 7 * self.config.num_players + 4 * self.config.history_len
+        self.eval_pool = None
+        if self.config.cpu_eval_workers and self.config.cpu_eval_workers > 0:
+            ctx = mp.get_context("spawn")
+            self.eval_pool = ctx.Pool(processes=self.config.cpu_eval_workers)
+            atexit.register(self.eval_pool.close)
         self._allocate()
         self.reset()
 
@@ -263,10 +281,19 @@ class CudaNLHEEnv:
         active = self._eligible_players(env)
         if not active:
             return
+        board = [int(c) for c in self.board[env].tolist() if c >= 0]
+        holes = [(player, [int(c) for c in self.hole_cards[env, player].tolist() if c >= 0]) for player in active]
+        scores = _score_payload((board, holes))
+        score_map = {player: score for player, score in scores}
+        self._resolve_showdown_with_scores(env, score_map)
+
+    def _resolve_showdown_with_scores(self, env: int, score_map: dict[int, int]):
+        active = self._eligible_players(env)
+        if not active:
+            return
         contributions = self.in_pot[env].tolist()
         levels = sorted({int(c) for c in contributions if c > 0})
         prev = 0
-        board = [int(c) for c in self.board[env].tolist() if c >= 0]
         for level in levels:
             pot = (level - prev) * sum(1 for c in contributions if c >= level)
             pot = self._apply_rake(env, pot, street_index=3)
@@ -274,12 +301,8 @@ class CudaNLHEEnv:
             if not eligible:
                 prev = level
                 continue
-            scores = []
-            for player in eligible:
-                hole = [int(c) for c in self.hole_cards[env, player].tolist() if c >= 0]
-                scores.append((self.evaluator.evaluate(board, hole), player))
-            best = min(scores, key=lambda x: x[0])[0]
-            winners = [i for score, i in scores if score == best]
+            best = min(score_map[i] for i in eligible)
+            winners = [i for i in eligible if score_map[i] == best]
             share = pot // len(winners)
             remainder = pot - share * len(winners)
             for player in winners:
@@ -290,6 +313,23 @@ class CudaNLHEEnv:
                 )
                 self.stacks[env, winners_sorted[0]] += remainder
             prev = level
+
+    def _resolve_showdowns(self, env_indices: List[int]):
+        if not env_indices:
+            return
+        payloads = []
+        for env in env_indices:
+            board = [int(c) for c in self.board[env].tolist() if c >= 0]
+            active = self._eligible_players(env)
+            holes = [(player, [int(c) for c in self.hole_cards[env, player].tolist() if c >= 0]) for player in active]
+            payloads.append((board, holes))
+        if self.eval_pool:
+            results = self.eval_pool.map(_score_payload, payloads)
+        else:
+            results = [_score_payload(payload) for payload in payloads]
+        for env, scores in zip(env_indices, results):
+            score_map = {player: score for player, score in scores}
+            self._resolve_showdown_with_scores(env, score_map)
 
     def _finish_hand(self, env: int):
         self.hands_left[env] -= 1
@@ -384,6 +424,7 @@ class CudaNLHEEnv:
         b = self.config.batch_size
         action_types = action_types.detach().cpu().tolist()
         bet_fracs = bet_fracs.detach().cpu().tolist()
+        showdown_envs = []
         for env in range(b):
             if bool(self.episode_over[env].item()):
                 continue
@@ -392,8 +433,7 @@ class CudaNLHEEnv:
                 while int(self.round_index[env].item()) < 3:
                     self._advance_round(env)
                 self.round_index[env] = 4
-                self._resolve_showdown(env)
-                self._finish_hand(env)
+                showdown_envs.append(env)
                 continue
 
             player = int(self.current_player[env].item())
@@ -458,8 +498,7 @@ class CudaNLHEEnv:
                 while int(self.round_index[env].item()) < 3:
                     self._advance_round(env)
                 self.round_index[env] = 4
-                self._resolve_showdown(env)
-                self._finish_hand(env)
+                showdown_envs.append(env)
                 continue
 
             if not bool(self.pending[env].any().item()):
@@ -467,12 +506,15 @@ class CudaNLHEEnv:
                     self._advance_round(env)
                 else:
                     self.round_index[env] = 4
-                    self._resolve_showdown(env)
-                    self._finish_hand(env)
+                    showdown_envs.append(env)
                 continue
 
             self.current_player[env] = self._next_player(env, player)
 
+        if showdown_envs:
+            self._resolve_showdowns(showdown_envs)
+            for env in showdown_envs:
+                self._finish_hand(env)
         return self.get_obs()
 
     def get_payoffs(self) -> torch.Tensor:
