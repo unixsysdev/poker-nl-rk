@@ -12,6 +12,9 @@ pip install -r requirements.txt
 python train_cfr.py --game leduc_poker --iterations 2000 --eval-every 200
 ```
 
+For the custom multi-player NLHE environment with continuous bet sizing, see
+`custom_poker_lab/README.md`.
+
 ## OpenSpiel Poker Env (Gymnasium)
 
 The Gymnasium wrapper lives in `poker_rl/envs/openspiel_poker_env.py` and gives
